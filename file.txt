@@ -1,0 +1,108 @@
+PHASE 1 - WHAT WE BUILT (SIMPLE SUMMARY)
+
+Goal: Give it startup info -> it returns the TOP 10 smart due-diligence
+questions, ranked from most to least important.
+
+(Note: this started as "generate ONE question" but the requirement was
+changed to "generate TOP 10 questions" — this summary reflects the current,
+final version.)
+
+STEPS WE DID:
+
+1. Fetch the webpage
+   - We download the article from startupscience.io (due diligence checklist page).
+
+2. Extract the real content
+   - We pull out just the article text (title + sections), ignore menus/footer/junk.
+
+3. Clean the text
+   - Remove extra spaces and messy formatting.
+
+4. Chunk the text
+   - Break the long article into small pieces (~1000 characters each).
+
+5. Add labels (metadata) to each piece
+   - Each piece remembers: which webpage it came from, article title, and
+     which section (like "Financial Diligence" or "Legal Diligence").
+
+6. Turn text into numbers (embeddings)
+   - Used a free local AI model (no API cost) to convert each text piece
+     into a number vector so a computer can compare meanings.
+
+7. Store in ChromaDB
+   - Saved all the number vectors in a local database on disk
+     (data/chroma folder) so we don't have to redo this every time.
+
+8. Retrieve relevant info
+   - When given startup info (e.g. "15 employees, 2 crore revenue"),
+     we search the database and pull the top 10 most relevant
+     due-diligence pieces (broadened from 4 to 10, since we now need
+     enough material to cover 10 different questions, not just one).
+
+9. Ask the AI (LLM) to generate the TOP 10 questions
+   - We used NVIDIA's AI model (Llama 3.1 70B).
+   - We gave it: the startup info + the relevant due-diligence pieces.
+   - We told it strict rules:
+     - Generate exactly 10 questions
+     - Ground each question in BOTH the startup info AND the retrieved
+       due-diligence material
+     - Never copy questions straight from the knowledge base
+     - Never ask something already answered
+     - No generic/basic questions
+     - No duplicate or near-duplicate questions
+     - Rank them from highest to lowest priority
+     - Adjust depth based on startup stage if mentioned
+   - The AI replies in a structured format (JSON), and each question comes
+     with: the question itself, category, priority (High/Medium/Low),
+     reason, and which due-diligence section it came from.
+
+RESULT (tested and working):
+Input: "We're a B2B SaaS startup, 15 employees, ₹2 crore annual revenue"
+
+Output: 10 ranked questions such as:
+1. [High/Financial] Can you provide 12 months of bank statements to verify
+   the ₹2 crore annual revenue claim?
+2. [High/Financial] What is the customer concentration — does any single
+   customer account for more than 30% of revenue?
+3. [High/Financial] What is the burn rate and runway based on current bank
+   balance and monthly spend?
+...continuing down through Team, Legal, Traction, and Operational
+   categories, ending with Low priority items.
+
+These are deep, specific follow-up questions — not basic ones like
+"what does your product do?"
+
+FILES CREATED / CHANGED:
+- app/config.py                    -> settings (URLs, model names, retrieval size = 10, NUM_QUESTIONS = 10)
+- app/rag/ingest.py                 -> fetch + extract webpage
+- app/rag/chunking.py               -> clean + chunk text
+- app/rag/vectorstore.py            -> embeddings + ChromaDB storage
+- app/rag/retriever.py              -> search/retrieve relevant chunks
+- app/question_engine/generator.py  -> ask the AI for top 10 ranked questions (JSON output, validated, deduplicated)
+- scripts/build_index.py            -> run once to build the database
+- scripts/generate_questions.py     -> run to get top 10 questions for your startup info
+- tests/test_pipeline.py            -> checks everything works, confirms exactly 10 unique questions
+- .env                              -> holds the secret API key (not shared/committed)
+- README.md                         -> instructions
+
+HOW TO RUN IT:
+1. source .venv/bin/activate
+2. python scripts/build_index.py
+3. python scripts/generate_questions.py "your startup info here"
+
+A TECHNICAL SNAG WE HIT AND FIXED:
+- We first tried LangChain's built-in "structured output" feature to force
+  the AI to return the 10 questions in a clean format. This silently failed
+  (returned nothing) because NVIDIA's hosted Llama model doesn't reliably
+  support that particular method.
+- Fix: we now directly ask the AI to reply with plain JSON text, and we
+  read/check that JSON ourselves in code. This works reliably.
+
+WHAT WE DID NOT BUILD YET (later phases):
+- No database like PostgreSQL
+- No web server (FastAPI)
+- No frontend/website
+- No login system
+- No conversation history / follow-up questions
+- No multi-step AI agents
+- No Docker / deployment
