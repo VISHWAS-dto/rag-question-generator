@@ -8,12 +8,17 @@ from sqlalchemy.orm import Session as DBSession
 
 from app.db import get_db, init_db
 from app.models import Question, QuestionStatus
+from app.report_engine.report_generator import ReportGenerationError
+from app.report_engine.schemas import AssessmentReportSchema
 from app.session_manager import (
+    IncompleteSessionError,
     NotFoundError,
     ValidationError,
+    complete_session,
     create_session,
     get_current_question,
     get_question,
+    get_report,
     get_session,
     list_questions,
     submit_answer,
@@ -190,6 +195,34 @@ def post_followup(question_id: str, db: DBSession = Depends(get_db)):
         reason=decision.reason,
         question=_question_to_response(next_question) if next_question else None,
     )
+
+
+@router.post("/sessions/{session_id}/complete", response_model=AssessmentReportSchema)
+def post_complete_session(session_id: str, db: DBSession = Depends(get_db)):
+    """Generate the Phase 3 due-diligence report for a completed session.
+
+    Idempotent: a second call for the same session returns the existing
+    report rather than generating a new one.
+    """
+    try:
+        return complete_session(db, session_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except IncompleteSessionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ReportGenerationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.get("/sessions/{session_id}/report", response_model=AssessmentReportSchema)
+def get_session_report(session_id: str, db: DBSession = Depends(get_db)):
+    """Return the stored Phase 3 report for a session. Does not generate one
+    — use POST /sessions/{session_id}/complete for that.
+    """
+    try:
+        return get_report(db, session_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 def create_app() -> FastAPI:

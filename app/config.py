@@ -28,6 +28,15 @@ NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY")
 LLM_MODEL_NAME = "meta/llama-3.1-70b-instruct"
 LLM_TEMPERATURE = 0.4
 
+# --- Phase 3: report analysis LLM ---
+# ChatNVIDIA defaults max_tokens to 1024, which is enough for Phase 1's ten
+# short questions or Phase 2's single follow-up decision, but not for a full
+# InterviewAnalysis (mandatory assessments for all 10 categories, plus
+# strengths/risks/gaps/contradictions/recommendations) — that response was
+# observed to be truncated mid-JSON at the default limit. Set explicitly,
+# well above what a full report response needs.
+REPORT_LLM_MAX_TOKENS = 4096
+
 # --- Retrieval ---
 # Broader than a single-question pipeline needs, since we must ground
 # 10 distinct, non-overlapping questions across multiple due-diligence
@@ -45,6 +54,15 @@ SQLITE_URL = f"sqlite:///{SQLITE_DB_PATH}"
 # Narrower than the top-10 generation step, since we're now grounding a
 # single question+answer pair rather than covering many categories at once.
 FOLLOWUP_RETRIEVAL_TOP_K = 4
+
+# Maximum follow-up questions allowed per Top-10 question before the system
+# forces a move to the next Top-10 question, regardless of the LLM's
+# decision. Without this cap, a chain of vague or evasive answers can keep
+# opening new, individually-reasonable follow-up threads indefinitely
+# (observed live: 11+ follow-ups deep on a single Top-10 question with no
+# sign of converging), which would prevent the interview from ever reaching
+# SessionStatus.COMPLETED.
+MAX_FOLLOWUPS_PER_QUESTION = 3
 
 
 def require_nvidia_api_key() -> str:

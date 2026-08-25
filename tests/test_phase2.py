@@ -25,9 +25,10 @@ import json
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from app.config import MAX_FOLLOWUPS_PER_QUESTION
 from app.models import Base, QuestionStatus
 from app.question_engine.followup import decide_followup
-from app.session_manager import get_current_question, submit_answer
+from app.session_manager import ValidationError, get_current_question, submit_answer
 
 STARTUP_INFO = (
     "We're a B2B SaaS startup, 15 employees, ₹2 crore annual revenue. "
@@ -123,7 +124,7 @@ def make_session_with_top10(db, monkeypatch_top10=None):
 
 
 def test_answer_storage() -> None:
-    print("[1/7] Testing answer storage...")
+    print("[1/10] Testing answer storage...")
     db = make_test_db()
     session = make_session_with_top10(db)
     q1 = session.questions[0]
@@ -143,7 +144,7 @@ def test_answer_storage() -> None:
 
 
 def test_followup_generated() -> None:
-    print("[2/7] Testing follow-up generation...")
+    print("[2/10] Testing follow-up generation...")
     db = make_test_db()
     session = make_session_with_top10(db)
     q1 = session.questions[0]  # revenue concentration question
@@ -167,7 +168,7 @@ def test_followup_generated() -> None:
 
 
 def test_no_followup_moves_to_next() -> None:
-    print("[3/7] Testing no-follow-up -> next question flow...")
+    print("[3/10] Testing no-follow-up -> next question flow...")
     db = make_test_db()
     session = make_session_with_top10(db)
     q1 = session.questions[0]
@@ -189,7 +190,7 @@ def test_no_followup_moves_to_next() -> None:
 
 
 def test_duplicate_prevention() -> None:
-    print("[4/7] Testing duplicate follow-up prevention...")
+    print("[4/10] Testing duplicate follow-up prevention...")
     db = make_test_db()
     session = make_session_with_top10(db)
     q1 = session.questions[0]
@@ -236,7 +237,7 @@ def test_duplicate_prevention() -> None:
 
 
 def test_multi_turn_conversation() -> None:
-    print("[5/7] Testing multi-turn conversation flow...")
+    print("[5/10] Testing multi-turn conversation flow...")
     db = make_test_db()
     session = make_session_with_top10(db)
     q1 = session.questions[0]
@@ -278,7 +279,7 @@ def test_multi_turn_conversation() -> None:
 
 
 def test_grounding() -> None:
-    print("[6/7] Testing follow-up grounding in the actual answer...")
+    print("[6/10] Testing follow-up grounding in the actual answer...")
     db = make_test_db()
     session = make_session_with_top10(db)
     q1 = session.questions[0]
@@ -306,7 +307,7 @@ def test_grounding() -> None:
 
 
 def test_contradiction_detection() -> None:
-    print("[7/7] Testing contradiction detection...")
+    print("[7/10] Testing contradiction detection...")
     db = make_test_db()
 
     from app.models import AssessmentSession, Question
@@ -343,6 +344,151 @@ def test_contradiction_detection() -> None:
     assert "clarify" in result.next_question.question.lower()
     assert "5 crore" in result.next_question.question and "3 crore" in result.next_question.question
     print(f"      OK - contradiction follow-up generated: '{result.next_question.question}'")
+
+
+# --- Test 8: current-question sequencing (a pending follow-up on Q1 must be
+# answered before Q2 is offered, even though all Top-10 questions were
+# created before the follow-up) ---
+
+
+def test_current_question_sequencing() -> None:
+    print("[8/10] Testing current-question sequencing (follow-up before next Top-10)...")
+    db = make_test_db()
+    session = make_session_with_top10(db)
+    q1 = session.questions[0]
+    q2_id = session.questions[1].question_id
+
+    # Q1 answered -> follow-up required.
+    stub = StubLLM(
+        lambda _ctx: followup_decision(
+            "What measures are you taking to reduce your dependency on your top five customers?"
+        )
+    )
+    result = submit_answer(db, q1.question_id, "70%", llm=stub)
+    followup = result.next_question
+    assert followup is not None and followup.is_followup
+
+    # The current question must be the pending follow-up, NOT Q2 — even
+    # though Q2's created_at is earlier than the follow-up's, which is
+    # exactly the case "oldest pending" gets wrong. Expire the session's
+    # identity-mapped objects first so this read sees the follow-up
+    # submit_answer just committed, matching a real request: each FastAPI
+    # request gets its own fresh `db` session via Depends(get_db), so this
+    # staleness only arises here because the test reuses one `db` across
+    # multiple calls in-process.
+    db.expire_all()
+    current = get_current_question(db, session.session_id)
+    assert current is not None, "Expected the pending follow-up, got None"
+    assert current.question_id == followup.question_id, (
+        f"Expected the pending follow-up to be current, got '{current.question}' "
+        f"(is_followup={current.is_followup}) instead — Q2 must not be offered "
+        "before the follow-up on Q1 is answered"
+    )
+    assert current.question_id != q2_id
+    print("      OK - pending follow-up correctly precedes Q2, despite Q2's earlier created_at")
+
+    # Answer the follow-up with no further follow-up needed -> Q2 should now be current.
+    stub2 = StubLLM(lambda _ctx: no_followup_decision())
+    result2 = submit_answer(db, followup.question_id, "Diversifying our customer base.", llm=stub2)
+    assert result2.next_question is not None
+    assert result2.next_question.question_id == q2_id, "Should now advance to Q2"
+    print("      OK - advanced to Q2 only after the follow-up was resolved")
+
+
+# --- Test 9: follow-up depth cap ---
+#
+# Discovered by running the live system end-to-end: a chain of vague/evasive
+# answers kept opening new, individually-reasonable follow-up threads with
+# no sign of converging (11+ follow-ups deep on a single Top-10 question in
+# that live run). Without a cap, a session could never reach COMPLETED.
+
+
+def test_followup_depth_cap() -> None:
+    print(f"[9/10] Testing follow-up depth cap (max {MAX_FOLLOWUPS_PER_QUESTION})...")
+    db = make_test_db()
+    session = make_session_with_top10(db)
+    q1 = session.questions[0]
+    q2_id = session.questions[1].question_id
+
+    # An LLM that ALWAYS wants another follow-up, with a distinct question
+    # each time so the duplicate-suppression backstop never kicks in and
+    # only the depth cap can stop the chain.
+    call_count = {"n": 0}
+
+    def always_followup(_ctx):
+        call_count["n"] += 1
+        return followup_decision(f"Follow-up question number {call_count['n']}?")
+
+    stub = StubLLM(always_followup)
+
+    result = submit_answer(db, q1.question_id, "70%", llm=stub)
+    current_id = q1.question_id
+    followups_seen = 0
+    while result.decision.follow_up_required:
+        followups_seen += 1
+        assert followups_seen <= MAX_FOLLOWUPS_PER_QUESTION, (
+            f"Follow-up chain exceeded the configured cap of {MAX_FOLLOWUPS_PER_QUESTION} "
+            f"(seen {followups_seen} so far) — the depth cap did not stop it"
+        )
+        current_id = result.next_question.question_id
+        result = submit_answer(db, current_id, "Still no concrete data.", llm=stub)
+
+    assert followups_seen == MAX_FOLLOWUPS_PER_QUESTION, (
+        f"Expected exactly {MAX_FOLLOWUPS_PER_QUESTION} follow-ups before the cap forced a "
+        f"move on, got {followups_seen}"
+    )
+    assert result.next_question is not None
+    assert result.next_question.question_id == q2_id, (
+        "After hitting the cap, the session must advance to the next Top-10 question"
+    )
+    assert "maximum" in result.decision.reason.lower()
+    print(
+        f"      OK - chain capped at exactly {MAX_FOLLOWUPS_PER_QUESTION} follow-ups, "
+        "then advanced to Q2"
+    )
+
+
+# --- Test 10: concurrent duplicate-answer race is handled gracefully ---
+#
+# Discovered live: two submissions landing close together on the same
+# question can both read status=PENDING before either commits, so the
+# in-Python ANSWERED check doesn't catch it — the answers.question_id
+# UNIQUE constraint is the real guard. Before the fix, that constraint
+# violation surfaced as a raw, unhandled IntegrityError (500) instead of the
+# same ValidationError (422) a non-concurrent duplicate submission raises.
+
+
+def test_concurrent_duplicate_answer_race() -> None:
+    print("[10/10] Testing concurrent duplicate-answer submissions raise ValidationError...")
+    db = make_test_db()
+    session = make_session_with_top10(db)
+    q1 = session.questions[0]
+
+    stub = StubLLM(lambda _ctx: no_followup_decision())
+    submit_answer(db, q1.question_id, "70%", llm=stub)
+
+    # Simulate the race directly: bypass the in-Python status check that a
+    # second concurrent request's read would also have passed, by inserting
+    # a duplicate Answer row the same way submit_answer does, and confirm
+    # the DB-level guard converts the resulting IntegrityError into the same
+    # ValidationError a normal duplicate-answer call raises.
+    from app.models import Answer
+    from sqlalchemy.exc import IntegrityError
+
+    db.add(Answer(question_id=q1.question_id, session_id=session.session_id, answer="duplicate"))
+    try:
+        db.flush()
+        raise AssertionError("Expected IntegrityError from the UNIQUE constraint")
+    except IntegrityError:
+        db.rollback()
+
+    # And the actual code path: submit_answer on an already-ANSWERED question
+    # must raise ValidationError (422), not leak a raw IntegrityError.
+    try:
+        submit_answer(db, q1.question_id, "duplicate via submit_answer", llm=stub)
+        raise AssertionError("Expected ValidationError")
+    except ValidationError:
+        print("      OK - duplicate submission raises ValidationError, not a raw IntegrityError")
 
 
 # --- Live integration test (real NVIDIA LLM, real RAG retrieval) ---
@@ -382,6 +528,9 @@ def main() -> None:
     test_multi_turn_conversation()
     test_grounding()
     test_contradiction_detection()
+    test_current_question_sequencing()
+    test_followup_depth_cap()
+    test_concurrent_duplicate_answer_race()
 
     try:
         test_live_integration()

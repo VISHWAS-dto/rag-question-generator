@@ -8,12 +8,23 @@ duplicated here.
 
 from dataclasses import dataclass
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DBSession
 
-from app.models import Answer, AssessmentSession, Question, QuestionStatus, SessionStatus
+from app.config import MAX_FOLLOWUPS_PER_QUESTION
+from app.models import (
+    Answer,
+    AssessmentReport,
+    AssessmentSession,
+    Question,
+    QuestionStatus,
+    SessionStatus,
+)
 from app.question_engine.context_builder import build_followup_context
 from app.question_engine.followup import FollowupDecision, SupportsInvoke, decide_followup
 from app.question_engine.generator import generate_top_questions
+from app.report_engine.report_generator import generate_report
+from app.report_engine.schemas import AssessmentReportSchema
 
 
 class NotFoundError(LookupError):
@@ -22,6 +33,12 @@ class NotFoundError(LookupError):
 
 class ValidationError(ValueError):
     pass
+
+
+class IncompleteSessionError(ValueError):
+    """Raised when report generation is requested for a session that still
+    has an unanswered Top-10 question or an outstanding follow-up.
+    """
 
 
 @dataclass
@@ -51,7 +68,7 @@ def create_session(
     db.add(session)
     db.flush()
 
-    top_questions = generate_top_questions(startup_info)
+    top_questions = generate_top_questions(startup_info, startup_stage=startup_stage)
     for rank, q in enumerate(top_questions, start=1):
         db.add(
             Question(
@@ -90,16 +107,33 @@ def list_questions(db: DBSession, session_id: str) -> list[Question]:
 
 
 def get_current_question(db: DBSession, session_id: str) -> Question | None:
-    """The question the user should answer next: the oldest PENDING question
-    (a follow-up, if one is outstanding, otherwise the next top-10 question —
-    follow-ups are created immediately after their parent's answer, so
-    creation order already reflects the correct turn order).
+    """The question the user should answer next.
+
+    Walks the Top-10 questions in rank order. For the first one whose thread
+    (itself plus all its follow-ups) still has a pending question, returns
+    the oldest pending question in that thread — a follow-up must always be
+    completed before the next Top-10 question is offered.
+
+    This must NOT be "oldest pending question by created_at" across the
+    whole session: all 10 Top-10 questions are inserted in a single batch at
+    session creation (same/near-identical timestamp), while a follow-up is
+    always created later. Picking by raw created_at would therefore prefer
+    an unanswered Top-10 question over a pending follow-up on an earlier
+    Top-10 question, letting the interview skip ahead before the follow-up
+    is resolved.
     """
     session = get_session(db, session_id)
-    pending = [q for q in session.questions if q.status == QuestionStatus.PENDING]
-    if not pending:
-        return None
-    return min(pending, key=lambda q: q.created_at)
+    top_level = sorted(
+        (q for q in session.questions if not q.is_followup), key=lambda q: q.rank or 0
+    )
+
+    for top in top_level:
+        thread = [top, *sorted(top.follow_ups, key=lambda q: q.created_at)]
+        pending_in_thread = [q for q in thread if q.status == QuestionStatus.PENDING]
+        if pending_in_thread:
+            return pending_in_thread[0]
+
+    return None
 
 
 def submit_answer(
@@ -125,11 +159,41 @@ def submit_answer(
     )
     db.add(answer)
     question.status = QuestionStatus.ANSWERED
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        # The status check above has a race window: two concurrent requests
+        # for the same question can both read PENDING before either commits.
+        # The `answers.question_id` UNIQUE constraint is the actual guard;
+        # translate its violation into the same ValidationError a
+        # non-concurrent duplicate submission raises, instead of letting a
+        # raw IntegrityError surface as an unhandled 500.
+        db.rollback()
+        raise ValidationError(f"Question {question_id} has already been answered") from exc
     db.refresh(session)
 
     ctx = build_followup_context(session, question, answer_text.strip())
     decision = decide_followup(ctx, llm=llm)
+
+    top_level = get_question(db, question.top_level_question_id)
+    existing_followup_count = len(top_level.follow_ups)
+    if decision.follow_up_required and existing_followup_count >= MAX_FOLLOWUPS_PER_QUESTION:
+        # Defensive cap: without this, a chain of vague/evasive answers can
+        # keep opening new, individually-reasonable follow-up threads
+        # indefinitely (observed live: 11+ deep, never converging), which
+        # would prevent the interview from ever completing. Force a move to
+        # the next Top-10 question instead of asking another follow-up.
+        decision = FollowupDecision(
+            follow_up_required=False,
+            question=None,
+            category=None,
+            priority=None,
+            reason=(
+                f"Suppressed: reached the maximum of {MAX_FOLLOWUPS_PER_QUESTION} "
+                "follow-ups for this question. Moving on to the next Top-10 question; "
+                f"original reason for a further follow-up: {decision.reason}"
+            ),
+        )
 
     next_question: Question | None = None
 
@@ -157,4 +221,111 @@ def submit_answer(
     session_completed = next_question is None
     return AnswerResult(
         decision=decision, next_question=next_question, session_completed=session_completed
+    )
+
+
+# --- Phase 3: session completion + report generation ---
+
+
+def is_session_complete(db: DBSession, session_id: str) -> bool:
+    """A session is eligible for a final report only when every Top-10
+    question has been answered and there is no pending follow-up anywhere in
+    the session — i.e. get_current_question returns nothing left to ask.
+    """
+    return get_current_question(db, session_id) is None
+
+
+def complete_session(
+    db: DBSession, session_id: str, llm: SupportsInvoke | None = None
+) -> AssessmentReportSchema:
+    """Generate (or, if one already exists, return) the final Phase 3 report
+    for a completed session.
+
+    Idempotent: calling this twice for the same session does not generate a
+    second report — the existing stored report is returned as-is, without
+    re-running analysis.
+
+    Raises IncompleteSessionError if the interview isn't actually finished
+    (an unanswered Top-10 question or a pending follow-up remains), and
+    ReportGenerationError if RAG retrieval, the LLM call, or report
+    validation fails.
+    """
+    session = get_session(db, session_id)
+
+    existing = db.query(AssessmentReport).filter_by(session_id=session_id).one_or_none()
+    if existing is not None:
+        return _report_row_to_schema(existing)
+
+    if not is_session_complete(db, session_id):
+        raise IncompleteSessionError(
+            f"Session {session_id} is not complete: an unanswered Top-10 question or "
+            "pending follow-up remains. All questions must be answered before a report "
+            "can be generated."
+        )
+
+    report_schema = generate_report(session, llm=llm)
+
+    session.status = SessionStatus.COMPLETED
+    row = AssessmentReport(
+        report_id=report_schema.report_id,
+        session_id=session_id,
+        overall_score=report_schema.overall_score,
+        risk_level=report_schema.risk_level.value,
+        executive_summary=report_schema.executive_summary,
+        strengths=[s.model_dump(mode="json") for s in report_schema.strengths],
+        risks=[r.model_dump(mode="json") for r in report_schema.risks],
+        information_gaps=[g.model_dump(mode="json") for g in report_schema.information_gaps],
+        contradictions=[c.model_dump(mode="json") for c in report_schema.contradictions],
+        category_scores={
+            cat.value if hasattr(cat, "value") else cat: score
+            for cat, score in report_schema.category_scores.items()
+        },
+        recommendations=[r.model_dump(mode="json") for r in report_schema.recommendations],
+    )
+    db.add(row)
+
+    # Guard against a race: a concurrent request may have inserted a report
+    # for this session between the earlier existence check and this commit
+    # (session_id is UNIQUE on assessment_reports). Fall back to returning
+    # that report rather than erroring, keeping this endpoint idempotent.
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        existing = db.query(AssessmentReport).filter_by(session_id=session_id).one_or_none()
+        if existing is not None:
+            return _report_row_to_schema(existing)
+        raise
+
+    db.refresh(row)
+    return _report_row_to_schema(row)
+
+
+def get_report(db: DBSession, session_id: str) -> AssessmentReportSchema:
+    """Fetch the stored report for a session. Raises NotFoundError if the
+    session doesn't exist, or if it exists but no report has been generated
+    yet (report generation is never implicitly triggered by a GET).
+    """
+    get_session(db, session_id)  # raises NotFoundError if the session itself is missing
+
+    row = db.query(AssessmentReport).filter_by(session_id=session_id).one_or_none()
+    if row is None:
+        raise NotFoundError(f"No report exists yet for session {session_id}")
+    return _report_row_to_schema(row)
+
+
+def _report_row_to_schema(row: AssessmentReport) -> AssessmentReportSchema:
+    return AssessmentReportSchema(
+        report_id=row.report_id,
+        session_id=row.session_id,
+        overall_score=row.overall_score,
+        risk_level=row.risk_level,
+        executive_summary=row.executive_summary,
+        strengths=row.strengths,
+        risks=row.risks,
+        information_gaps=row.information_gaps,
+        contradictions=row.contradictions,
+        category_scores=row.category_scores,
+        recommendations=row.recommendations,
+        created_at=row.created_at.isoformat(),
     )

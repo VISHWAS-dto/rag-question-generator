@@ -108,6 +108,8 @@ USER_PROMPT = """\
 Startup information:
 {startup_info}
 
+Startup stage: {startup_stage}
+
 Relevant due-diligence reference material:
 {context}
 
@@ -183,7 +185,7 @@ def _dedupe(questions: list[DueDiligenceQuestion]) -> list[DueDiligenceQuestion]
 
 
 def generate_top_questions(
-    startup_info: str, k: int = RETRIEVAL_TOP_K
+    startup_info: str, startup_stage: str | None = None, k: int = RETRIEVAL_TOP_K
 ) -> list[DueDiligenceQuestion]:
     """Retrieve relevant due-diligence context and generate the top N ranked questions."""
     documents = retrieve_context(startup_info, k=k)
@@ -198,6 +200,7 @@ def generate_top_questions(
     response = chain.invoke(
         {
             "startup_info": startup_info,
+            "startup_stage": startup_stage or "Not specified",
             "context": context,
             "num_questions": NUM_QUESTIONS,
         }
