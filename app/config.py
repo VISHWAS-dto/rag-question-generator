@@ -37,6 +37,15 @@ RETRIEVAL_TOP_K = 10
 # --- Question generation ---
 NUM_QUESTIONS = 10
 
+# --- Phase 2: sessions / answers / follow-ups ---
+SQLITE_DB_PATH = str(PROJECT_ROOT / "data" / "phase2.db")
+SQLITE_URL = f"sqlite:///{SQLITE_DB_PATH}"
+
+# How much RAG context to retrieve when grounding a follow-up decision.
+# Narrower than the top-10 generation step, since we're now grounding a
+# single question+answer pair rather than covering many categories at once.
+FOLLOWUP_RETRIEVAL_TOP_K = 4
+
 
 def require_nvidia_api_key() -> str:
     if not NVIDIA_API_KEY:

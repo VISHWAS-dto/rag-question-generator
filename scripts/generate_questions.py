@@ -16,16 +16,9 @@ DEFAULT_STARTUP_INFO = "We have 10,000 customers and ₹2 crore annual revenue."
 
 
 def print_questions(questions) -> None:
-    print(f"\n{'=' * 70}")
-    print(f"TOP {len(questions)} DUE-DILIGENCE QUESTIONS")
-    print(f"{'=' * 70}\n")
+    print("\nTOP 10 QUESTIONS\n")
     for i, q in enumerate(questions, start=1):
-        print(f"{i}. Question: {q.question}")
-        print(f"   Category: {q.category}")
-        print(f"   Priority: {q.priority}")
-        print(f"   Reason: {q.reason}")
-        print(f"   Source: {q.source_context}")
-        print()
+        print(f"{i}. {q.question}")
 
 
 def main() -> None:

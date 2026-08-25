@@ -1,5 +1,15 @@
 """Embedding model + ChromaDB persistent vector store setup."""
 
+import os
+
+# The posthog version resolved in this project's environment isn't
+# compatible with chromadb 0.5.20's telemetry calls, which spams
+# "Failed to send telemetry event ... capture() takes 1 positional argument
+# but 3 were given" to stderr on every call. It's harmless but looks like a
+# crash, so it's disabled. Must be set before chromadb is imported anywhere
+# in the process (chromadb reads it once at import time).
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
+
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_huggingface import HuggingFaceEmbeddings

@@ -1,11 +1,14 @@
-"""Thin orchestrator for Phase 1: given startup info, return the top 10
-ranked due-diligence questions.
+"""Thin orchestrator for Phase 1, plus the Phase 2 FastAPI app.
 
 For the indexing step, use scripts/build_index.py.
-For CLI usage, use scripts/generate_questions.py.
+For Phase 1 CLI usage, use scripts/generate_questions.py.
+For the Phase 2 API server, run: uvicorn app.main:app --reload
 """
 
+from app.api import create_app
 from app.question_engine.generator import DueDiligenceQuestion, generate_top_questions
+
+app = create_app()
 
 
 def generate_due_diligence_questions(startup_info: str) -> list[DueDiligenceQuestion]:

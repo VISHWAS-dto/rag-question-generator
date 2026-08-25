@@ -6,5 +6,6 @@ venv/
 myenv/
 chroma_db/
 data/chroma/
+data/phase2.db
 .pytest_cache/
 *.egg-info/
