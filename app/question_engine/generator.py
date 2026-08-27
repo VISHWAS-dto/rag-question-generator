@@ -15,6 +15,7 @@ from app.config import (
     LLM_TEMPERATURE,
     NUM_QUESTIONS,
     RETRIEVAL_TOP_K,
+    REPORT_LLM_MAX_TOKENS,
     require_nvidia_api_key,
 )
 from app.rag.retriever import format_context, retrieve_context
@@ -133,7 +134,11 @@ def get_llm() -> ChatNVIDIA:
     global _llm
     if _llm is None:
         require_nvidia_api_key()
-        _llm = ChatNVIDIA(model=LLM_MODEL_NAME, temperature=LLM_TEMPERATURE)
+        _llm = ChatNVIDIA(
+            model=LLM_MODEL_NAME,
+            temperature=LLM_TEMPERATURE,
+            max_tokens=REPORT_LLM_MAX_TOKENS,
+        )
     return _llm
 
 

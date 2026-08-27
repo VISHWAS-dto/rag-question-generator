@@ -25,7 +25,7 @@ EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
 # --- LLM (NVIDIA NIM) ---
 NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY")
-LLM_MODEL_NAME = "meta/llama-3.1-70b-instruct"
+LLM_MODEL_NAME = "nvidia/nemotron-3-super-120b-a12b"
 LLM_TEMPERATURE = 0.4
 
 # --- Phase 3: report analysis LLM ---
