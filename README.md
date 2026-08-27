@@ -2,7 +2,6 @@
 
 Given a startup's self-reported information, this app retrieves relevant
 due-diligence context from a knowledge base built from
-[Startup Science's due diligence checklist](https://www.startupscience.io/articles/startup-due-diligence-checklist),
 generates the **top 10** ranked, probing due-diligence questions, and then
 runs an **interactive questioning session**: the user answers one question
 at a time, and the system decides — grounded in the RAG context and the
