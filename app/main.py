@@ -6,9 +6,21 @@ For the Phase 2 API server, run: uvicorn app.main:app --reload
 """
 
 from app.api import create_app
+from fastapi.middleware.cors import CORSMiddleware
 from app.question_engine.generator import DueDiligenceQuestion, generate_top_questions
 
 app = create_app()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://127.0.0.1:3000",
+        "http://localhost:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 def generate_due_diligence_questions(startup_info: str) -> list[DueDiligenceQuestion]:

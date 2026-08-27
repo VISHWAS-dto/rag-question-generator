@@ -95,6 +95,15 @@ def post_session(body: CreateSessionRequest, db: DBSession = Depends(get_db)):
         )
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (RuntimeError, TimeoutError, ConnectionError) as exc:
+        # Seeding the top-10 questions calls the NVIDIA LLM. If that fails
+        # (upstream timeout / transient error), return a explicit 502 with
+        # the reason rather than a bare 500 or a dropped connection — the
+        # latter reaches the browser only as "Failed to fetch".
+        raise HTTPException(
+            status_code=502,
+            detail=f"Question generation failed while creating the session: {exc}",
+        ) from exc
     return session
 
 

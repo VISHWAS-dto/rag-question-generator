@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Startup Due Diligence</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        h1 {
+            margin-bottom: 30px;
+        }
+        button {
+            padding: 10px 20px;
+            cursor: pointer;
+        }
+        #questions {
+            margin-top: 30px;
+        }
+        .question {
+            padding: 20px;
+            margin-bottom: 15px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+        }
+        .error {
+            color: red;
+            margin-top: 20px;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <h1>Startup Due Diligence</h1>
+    <button onclick="loadQuestions()">
+        Get Questions
+    </button>
+    <div id="questions"></div>
+    <div id="error" class="error"></div>
+    <script>
+        const API_BASE = "http://127.0.0.1:8001";
+
+        // fetch() with a real timeout and an error message that explains WHY,
+        // instead of the bare "Failed to fetch" the browser throws when a
+        // connection is refused or dropped mid-request.
+        async function fetchOrExplain(url, options = {}, timeoutMs = 180000) {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), timeoutMs);
+            try {
+                return await fetch(url, { ...options, mode: "cors", signal: controller.signal });
+            } catch (err) {
+                if (err.name === "AbortError") {
+                    throw new Error(
+                        `Request to ${url} timed out after ${Math.round(timeoutMs / 1000)}s. ` +
+                        `The backend may still be generating questions (the first ` +
+                        `POST /sessions call runs a slow LLM request). Try again, or check ` +
+                        `the uvicorn terminal for errors / a mid-request reload.`
+                    );
+                }
+                // TypeError: Failed to fetch lands here.
+                throw new Error(
+                    `Network error calling ${url}: ${err.message}. ` +
+                    `Most likely the backend at ${API_BASE} is not running, is on a ` +
+                    `different port, or was restarted mid-request by uvicorn --reload. ` +
+                    `Verify: curl -i ${API_BASE}/docs`
+                );
+            } finally {
+                clearTimeout(timer);
+            }
+        }
+
+        async function loadQuestions() {
+            const questionsContainer = document.getElementById("questions");
+            const errorContainer = document.getElementById("error");
+            questionsContainer.innerHTML =
+                "Starting due diligence… generating the top 10 questions. " +
+                "This first step calls the LLM and can take 20–40 seconds.";
+            errorContainer.innerHTML = "";
+
+            try {
+                // STEP 1: Create a new session
+                const sessionResponse = await fetchOrExplain(`${API_BASE}/sessions`, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        company_id: "swish",
+                        startup_info: "Swish is a food delivery company.",
+                        startup_stage: "Growth"
+                    })
+                });
+
+                if (!sessionResponse.ok) {
+                    const bodyText = await sessionResponse.text();
+                    throw new Error(
+                        `Could not create session. HTTP ${sessionResponse.status}. ` +
+                        `Response: ${bodyText || "(empty)"}`
+                    );
+                }
+
+                const sessionData = await sessionResponse.json();
+                const sessionId = sessionData.session_id;
+
+                if (!sessionId) {
+                    throw new Error(
+                        "Session created but no session_id was returned: " +
+                        JSON.stringify(sessionData)
+                    );
+                }
+                console.log("Session ID:", sessionId);
+
+                questionsContainer.innerHTML = "Session created. Fetching questions…";
+
+                // STEP 2: Get questions
+                const questionsResponse = await fetchOrExplain(
+                    `${API_BASE}/sessions/${sessionId}/questions`
+                );
+
+                if (!questionsResponse.ok) {
+                    const bodyText = await questionsResponse.text();
+                    throw new Error(
+                        `Could not get questions. HTTP ${questionsResponse.status}. ` +
+                        `Response: ${bodyText || "(empty)"}`
+                    );
+                }
+
+                const data = await questionsResponse.json();
+                console.log("Questions:", data);
+
+                // Handle either { questions: [...] } or a plain array response
+                const questionList = Array.isArray(data)
+                    ? data
+                    : data.questions;
+
+                if (!Array.isArray(questionList)) {
+                    throw new Error(
+                        "Unexpected response shape — expected a 'questions' array: " +
+                        JSON.stringify(data)
+                    );
+                }
+
+                // STEP 3: Display questions — show ONLY the "question" field
+                questionsContainer.innerHTML = "";
+
+                if (questionList.length === 0) {
+                    questionsContainer.innerHTML = "<p>No questions returned.</p>";
+                    return;
+                }
+
+                const total = questionList.length;
+                questionList.forEach((item, index) => {
+                    const questionDiv = document.createElement("div");
+                    questionDiv.className = "question";
+                    const questionText =
+                        typeof item === "string" ? item : item.question;
+                    const label = document.createElement("strong");
+                    label.textContent = `Question ${index + 1} of ${total}`;
+                    const body = document.createElement("p");
+                    body.textContent = questionText;
+                    questionDiv.appendChild(label);
+                    questionDiv.appendChild(body);
+                    questionsContainer.appendChild(questionDiv);
+                });
+            } catch (error) {
+                console.error(error);
+                questionsContainer.innerHTML = "";
+                errorContainer.innerHTML = "Error: " + error.message;
+            }
+        }
+    </script>
+</body>
+</html>

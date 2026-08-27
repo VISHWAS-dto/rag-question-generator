@@ -130,6 +130,14 @@ _llm = None
 _JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
+# The NVIDIA endpoints client defaults to a 60s request timeout. Generating
+# 10 grounded questions with a 120B model routinely runs longer than that,
+# which surfaced as intermittent HTTP 500s on POST /sessions (the call raised
+# a TimeoutError ~60s in, with no error handling on the route). Raise the
+# ceiling so a normal-but-slow generation completes instead of being cut off.
+LLM_REQUEST_TIMEOUT = 180
+
+
 def get_llm() -> ChatNVIDIA:
     global _llm
     if _llm is None:
@@ -138,6 +146,7 @@ def get_llm() -> ChatNVIDIA:
             model=LLM_MODEL_NAME,
             temperature=LLM_TEMPERATURE,
             max_tokens=REPORT_LLM_MAX_TOKENS,
+            timeout=LLM_REQUEST_TIMEOUT,
         )
     return _llm
 
@@ -202,15 +211,26 @@ def generate_top_questions(
 
     context = format_context(documents)
     chain = _prompt | get_llm()
-    response = chain.invoke(
-        {
-            "startup_info": startup_info,
-            "startup_stage": startup_stage or "Not specified",
-            "context": context,
-            "num_questions": NUM_QUESTIONS,
-        }
-    )
+    payload = {
+        "startup_info": startup_info,
+        "startup_stage": startup_stage or "Not specified",
+        "context": context,
+        "num_questions": NUM_QUESTIONS,
+    }
 
-    result = _parse_top_questions(response.content)
-    questions = _dedupe(result.questions)
-    return questions[:NUM_QUESTIONS]
+    # One retry: the hosted model occasionally times out or returns a
+    # truncated / non-JSON body on the first attempt. A single re-invoke
+    # clears the large majority of those without changing model behaviour.
+    last_exc: Exception | None = None
+    for attempt in range(2):
+        try:
+            response = chain.invoke(payload)
+            result = _parse_top_questions(response.content)
+            questions = _dedupe(result.questions)
+            return questions[:NUM_QUESTIONS]
+        except (RuntimeError, TimeoutError, ConnectionError) as exc:
+            last_exc = exc
+            continue
+    raise RuntimeError(
+        f"Question generation failed after 2 attempts: {last_exc}"
+    ) from last_exc
