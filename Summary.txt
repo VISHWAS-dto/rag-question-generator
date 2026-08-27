@@ -1,8 +1,4 @@
-====================================================================
-PROJECT SUMMARY - IN VERY SIMPLE WORDS
-====================================================================
-(Written so that anyone can understand it - no tech knowledge needed.
- Everything here is based on the real files in this project.)
+Everything here is based on the real files in this project.)
 
 
 --------------------------------------------------------------------
