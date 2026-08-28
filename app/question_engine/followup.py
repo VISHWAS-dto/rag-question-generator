@@ -15,6 +15,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 
 from app.config import LLM_MODEL_NAME, LLM_TEMPERATURE, require_nvidia_api_key
+from app.graph.repair_graph import run_repair_graph
 from app.question_engine.context_builder import FollowupContext, render_followup_prompt_context
 
 _JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
@@ -161,9 +162,12 @@ def decide_followup(ctx: FollowupContext, llm: SupportsInvoke | None = None) -> 
     `.invoke()` can stand in for the real ChatNVIDIA runnable.
     """
     target = llm if llm is not None else get_llm()
-    messages = _prompt.invoke({"context": render_followup_prompt_context(ctx)})
-    response = target.invoke(messages)
-    decision = _parse_followup_decision(response.content)
+    decision = run_repair_graph(
+        target,
+        _prompt,
+        {"context": render_followup_prompt_context(ctx)},
+        _parse_followup_decision,
+    )
 
     if decision.follow_up_required and decision.question:
         already_asked = [ctx.current_question, *ctx.existing_followup_questions] + [

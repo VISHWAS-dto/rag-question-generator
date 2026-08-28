@@ -46,6 +46,14 @@ RETRIEVAL_TOP_K = 10
 # --- Question generation ---
 NUM_QUESTIONS = 10
 
+# --- LLM output repair (LangGraph) ---
+# When the hosted model returns malformed JSON or output that fails schema
+# validation, the generate/parse/repair graph re-invokes the model with the
+# validation error appended to the prompt and asks for corrected JSON. This
+# is the number of repair re-invocations allowed *after* the initial attempt
+# (so total model calls per graph run is at most 1 + LLM_MAX_REPAIR_ATTEMPTS).
+LLM_MAX_REPAIR_ATTEMPTS = 2
+
 # --- Phase 2: sessions / answers / follow-ups ---
 SQLITE_DB_PATH = str(PROJECT_ROOT / "data" / "phase2.db")
 SQLITE_URL = f"sqlite:///{SQLITE_DB_PATH}"

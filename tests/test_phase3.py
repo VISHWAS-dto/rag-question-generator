@@ -82,6 +82,24 @@ class StubLLM:
         return StubResponse(json.dumps(self._analysis_dict))
 
 
+class RepairingStubLLM:
+    """First `.invoke()` returns malformed JSON (exercising the generate ->
+    parse -> repair LangGraph), then returns the canned analysis payload.
+    """
+
+    def __init__(self, analysis_dict, bad_responses=1):
+        self._analysis_dict = analysis_dict
+        self._bad_left = bad_responses
+        self.calls = 0
+
+    def invoke(self, _prompt_value) -> StubResponse:
+        self.calls += 1
+        if self._bad_left > 0:
+            self._bad_left -= 1
+            return StubResponse('{"executive_summary": "truncated mid-json')
+        return StubResponse(json.dumps(self._analysis_dict))
+
+
 def _all_category_assessments(
     assessment="Moderate", evidence_strength="Low", evidence_gaps=None
 ):
@@ -182,6 +200,21 @@ def test_report_generation() -> None:
     assert report.executive_summary
     assert len(report.category_scores) == len(Category)
     print(f"      OK - report generated, overall_score={report.overall_score}")
+
+
+def test_report_repairs_malformed_llm_output() -> None:
+    print("[1b/10] Testing report generation recovers from malformed LLM JSON...")
+    db = make_test_db()
+    session = make_completed_session(db)
+
+    stub = RepairingStubLLM(base_analysis())
+    report = complete_session(db, session.session_id, llm=stub)
+
+    assert stub.calls == 2, "Graph should re-invoke once to repair the bad first response"
+    assert report.session_id == session.session_id
+    assert report.executive_summary
+    assert len(report.category_scores) == len(Category)
+    print("      OK - malformed first response repaired, valid report produced")
 
 
 # --- Test 2: Incomplete session is rejected ---
@@ -561,6 +594,7 @@ def test_api_endpoints() -> None:
 
 def main() -> None:
     test_report_generation()
+    test_report_repairs_malformed_llm_output()
     test_incomplete_session_rejected()
     test_strength_detection()
     test_risk_detection()

@@ -41,6 +41,30 @@ The project has three phases, each building on the last:
 - **NVIDIA LLM** – the AI that writes the questions, decides follow-ups, and
   analyzes the interview.
 - **SQLite** – the local file that remembers each interview and its report.
+- **LangGraph** – wraps every AI call in a self-repair loop (see below).
+
+## LangGraph: self-repairing AI calls
+
+The AI is asked to reply as strict JSON, but sometimes it returns broken
+output — cut off, wrapped in extra text, or missing a field. Before, that
+failed the whole request (HTTP 500): no questions, no report.
+
+Each AI call now runs through a small LangGraph loop:
+
+```
+ask the model → try to parse it
+                     │
+        parsed OK ───┴─── broken → send it back with the error,
+             │                     ask for corrected JSON (retry up to 2×)
+           done                          │
+                              still broken after retries → raise the error
+```
+
+So a request that used to fail on the first bad response now usually
+succeeds, with no change to the questions, the report, or the API. This is
+applied to all three AI steps: question generation, follow-up decisions, and
+report analysis (`app/graph/repair_graph.py`; retry count is
+`LLM_MAX_REPAIR_ATTEMPTS` in `app/config.py`).
 
 ## Setup
 
@@ -93,9 +117,10 @@ GET  /sessions/{id}/report       fetch the saved report
 ## Testing
 
 ```bash
-python tests/test_pipeline.py   # Phase 1
-python tests/test_phase2.py     # Phase 2
-python tests/test_phase3.py     # Phase 3
+python tests/test_pipeline.py     # Phase 1
+python tests/test_phase2.py       # Phase 2
+python tests/test_phase3.py       # Phase 3
+python tests/test_repair_graph.py # LangGraph self-repair loop
 ```
 
 Phase 2 and 3 tests run offline. `test_pipeline.py` needs a built index and

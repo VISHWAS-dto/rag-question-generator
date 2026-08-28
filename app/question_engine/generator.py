@@ -4,6 +4,7 @@
 
 import json
 import re
+from typing import Protocol
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -18,6 +19,7 @@ from app.config import (
     REPORT_LLM_MAX_TOKENS,
     require_nvidia_api_key,
 )
+from app.graph.repair_graph import run_repair_graph
 from app.rag.retriever import format_context, retrieve_context
 
 PRIORITY_VALUES = ("High", "Medium", "Low")
@@ -130,6 +132,14 @@ _llm = None
 _JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
+class SupportsInvoke(Protocol):
+    """Minimal interface the generator needs from an LLM runnable — satisfied
+    by both ChatNVIDIA and test stubs exposing only `.invoke()`.
+    """
+
+    def invoke(self, prompt_value: object) -> object: ...
+
+
 # The NVIDIA endpoints client defaults to a 60s request timeout. Generating
 # 10 grounded questions with a 120B model routinely runs longer than that,
 # which surfaced as intermittent HTTP 500s on POST /sessions (the call raised
@@ -199,9 +209,20 @@ def _dedupe(questions: list[DueDiligenceQuestion]) -> list[DueDiligenceQuestion]
 
 
 def generate_top_questions(
-    startup_info: str, startup_stage: str | None = None, k: int = RETRIEVAL_TOP_K
+    startup_info: str,
+    startup_stage: str | None = None,
+    k: int = RETRIEVAL_TOP_K,
+    llm: SupportsInvoke | None = None,
 ) -> list[DueDiligenceQuestion]:
-    """Retrieve relevant due-diligence context and generate the top N ranked questions."""
+    """Retrieve relevant due-diligence context and generate the top N ranked questions.
+
+    Runs the generate -> parse -> repair LangGraph (app/graph/repair_graph.py):
+    if the hosted model returns malformed or schema-invalid JSON, the graph
+    re-invokes it with the validation error appended and asks for corrected
+    JSON, up to LLM_MAX_REPAIR_ATTEMPTS times, before raising the same
+    RuntimeError the manual parser raised. `llm` lets tests inject a stub
+    exposing only `.invoke()`.
+    """
     documents = retrieve_context(startup_info, k=k)
     if not documents:
         raise RuntimeError(
@@ -210,7 +231,6 @@ def generate_top_questions(
         )
 
     context = format_context(documents)
-    chain = _prompt | get_llm()
     payload = {
         "startup_info": startup_info,
         "startup_stage": startup_stage or "Not specified",
@@ -218,19 +238,11 @@ def generate_top_questions(
         "num_questions": NUM_QUESTIONS,
     }
 
-    # One retry: the hosted model occasionally times out or returns a
-    # truncated / non-JSON body on the first attempt. A single re-invoke
-    # clears the large majority of those without changing model behaviour.
-    last_exc: Exception | None = None
-    for attempt in range(2):
-        try:
-            response = chain.invoke(payload)
-            result = _parse_top_questions(response.content)
-            questions = _dedupe(result.questions)
-            return questions[:NUM_QUESTIONS]
-        except (RuntimeError, TimeoutError, ConnectionError) as exc:
-            last_exc = exc
-            continue
-    raise RuntimeError(
-        f"Question generation failed after 2 attempts: {last_exc}"
-    ) from last_exc
+    target = llm if llm is not None else get_llm()
+    try:
+        result = run_repair_graph(target, _prompt, payload, _parse_top_questions)
+    except (RuntimeError, TimeoutError, ConnectionError) as exc:
+        raise RuntimeError(f"Question generation failed: {exc}") from exc
+
+    questions = _dedupe(result.questions)
+    return questions[:NUM_QUESTIONS]

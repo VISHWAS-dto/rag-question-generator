@@ -24,6 +24,7 @@ from app.config import (
     REPORT_LLM_MAX_TOKENS,
     require_nvidia_api_key,
 )
+from app.graph.repair_graph import run_repair_graph
 from app.models import AssessmentSession
 from app.report_engine.evidence import InterviewTurn, collect_interview_turns
 from app.report_engine.schemas import Category, InterviewAnalysis
@@ -201,22 +202,26 @@ def analyze_interview(
 ) -> InterviewAnalysis:
     """Run the full-interview analysis and return validated, structured findings.
 
-    `llm` is called directly with the rendered prompt messages (rather than
-    composed via `_prompt | llm`), mirroring app/question_engine/followup.py,
-    so a plain test stub exposing only `.invoke()` can stand in for the real
-    ChatNVIDIA runnable.
+    Runs the generate -> parse -> repair LangGraph (app/graph/repair_graph.py):
+    if the hosted model returns malformed or schema-invalid JSON, the graph
+    re-invokes it with the validation error appended and asks for corrected
+    JSON, up to LLM_MAX_REPAIR_ATTEMPTS times, before raising the same
+    RuntimeError `_parse_analysis` raised. The LLM is only ever driven through
+    `.invoke()`, so a plain test stub exposing only `.invoke()` still stands
+    in for the real ChatNVIDIA runnable.
     """
     turns = collect_interview_turns(session)
     transcript = render_transcript(turns)
 
     target = llm if llm is not None else get_llm()
-    messages = _prompt.invoke(
+    return run_repair_graph(
+        target,
+        _prompt,
         {
             "startup_info": session.startup_info,
             "startup_stage": session.startup_stage or "Not specified",
             "rag_context": rag_context or "(none retrieved)",
             "transcript": transcript,
-        }
+        },
+        _parse_analysis,
     )
-    response = target.invoke(messages)
-    return _parse_analysis(response.content)

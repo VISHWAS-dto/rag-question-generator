@@ -68,6 +68,27 @@ class StubLLM:
         return StubResponse(json.dumps(decision))
 
 
+class RepairingStubLLM:
+    """Like StubLLM, but the first `.invoke()` returns deliberately malformed
+    output — exercising the generate -> parse -> repair LangGraph. Subsequent
+    invocations return the canned decision, so a caller that repairs correctly
+    still gets a valid FollowupDecision instead of a RuntimeError.
+    """
+
+    def __init__(self, decision_fn, bad_responses=1):
+        self._decision_fn = decision_fn
+        self._bad_left = bad_responses
+        self.calls = 0
+
+    def invoke(self, prompt_value) -> StubResponse:
+        self.calls += 1
+        if self._bad_left > 0:
+            self._bad_left -= 1
+            return StubResponse("sorry, here is the answer: {follow_up_required: true")
+        prompt_text = prompt_value.to_string()
+        return StubResponse(json.dumps(self._decision_fn(prompt_text)))
+
+
 def followup_decision(question: str, category="Financial", priority="High", reason="probe deeper"):
     return {
         "follow_up_required": True,
@@ -520,9 +541,30 @@ def test_live_integration() -> None:
         print("      OK - live LLM judged the answer sufficient, no follow-up")
 
 
+def test_followup_repairs_malformed_llm_output() -> None:
+    print("[repair] Testing follow-up recovers from malformed LLM JSON...")
+    db = make_test_db()
+    session = make_session_with_top10(db)
+    q1 = session.questions[0]
+
+    stub = RepairingStubLLM(
+        lambda _ctx: followup_decision(
+            "What measures are you taking to reduce your dependency on your top five customers?"
+        )
+    )
+    result = submit_answer(db, q1.question_id, "70%", llm=stub)
+
+    assert stub.calls == 2, "Graph should re-invoke once to repair the bad first response"
+    assert result.decision.follow_up_required is True
+    assert result.next_question is not None
+    assert "dependency" in result.next_question.question.lower()
+    print("      OK - malformed first response repaired, valid follow-up produced")
+
+
 def main() -> None:
     test_answer_storage()
     test_followup_generated()
+    test_followup_repairs_malformed_llm_output()
     test_no_followup_moves_to_next()
     test_duplicate_prevention()
     test_multi_turn_conversation()
