@@ -1,0 +1,1211 @@
+<title>The Analyst That Adapts</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,7&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+  :root {
+    /* ledger & redline — light (archival memo) */
+    --paper:      #f6f3ec;
+    --paper-2:    #efe9dc;
+    --card:       #fffdf7;
+    --ink:        #1c1a17;
+    --ink-soft:   #4a453d;
+    --rule:       #d8d0be;
+    --oxblood:    #7c2d2d;
+    --brass:      #a8853f;
+    --slate:      #4a5450;
+
+    --ok:   #3f6f4a;
+    --warn: #a8853f;
+    --high: #b5502f;
+    --crit: #7c2d2d;
+
+    --stage-w: min(96vw, 1280px);
+
+    --f-display: "Fraunces", "Iowan Old Style", Palatino, "Palatino Linotype", Georgia, serif;
+    --f-body: "Newsreader", Georgia, "Times New Roman", serif;
+    --f-mono: "IBM Plex Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+
+    --ease: cubic-bezier(.22, .61, .36, 1);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:    #16150f;
+      --paper-2:  #1f1d15;
+      --card:     #232016;
+      --ink:      #ece5d3;
+      --ink-soft: #b3aa93;
+      --rule:     #3a3527;
+      --oxblood:  #c65f5f;
+      --brass:    #d0a85a;
+      --slate:    #9aa6a0;
+
+      --ok:   #6fae7d;
+      --warn: #d0a85a;
+      --high: #e0865f;
+      --crit: #c65f5f;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --paper:    #16150f;
+    --paper-2:  #1f1d15;
+    --card:     #232016;
+    --ink:      #ece5d3;
+    --ink-soft: #b3aa93;
+    --rule:     #3a3527;
+    --oxblood:  #c65f5f;
+    --brass:    #d0a85a;
+    --slate:    #9aa6a0;
+    --ok:   #6fae7d;
+    --warn: #d0a85a;
+    --high: #e0865f;
+    --crit: #c65f5f;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body { height: 100%; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--f-body);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    /* faint ledger grid on the letterbox ground */
+    background-image:
+      linear-gradient(var(--rule) 1px, transparent 1px),
+      linear-gradient(90deg, var(--rule) 1px, transparent 1px);
+    background-size: 44px 44px;
+    background-position: center;
+  }
+  body::before {
+    /* vignette so the stage reads as lit */
+    content: "";
+    position: fixed; inset: 0;
+    background: radial-gradient(120% 90% at 50% 45%, transparent 40%, var(--paper) 100%);
+    pointer-events: none;
+  }
+
+  /* ---------- STAGE ---------- */
+  .stage {
+    position: relative;
+    width: var(--stage-w);
+    aspect-ratio: 16 / 9;
+    background: var(--paper-2);
+    border: 1px solid var(--rule);
+    box-shadow:
+      0 1px 0 rgba(255,255,255,.4) inset,
+      0 40px 90px -30px rgba(28, 26, 23, .45);
+    overflow: hidden;
+  }
+
+  .scene {
+    position: absolute;
+    inset: 0;
+    padding: clamp(24px, 4.2vw, 60px);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity .62s var(--ease), transform .62s var(--ease);
+    transform: translateY(14px);
+  }
+  .scene.active {
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+  }
+  .scene.leaving {
+    opacity: 0;
+    transform: translateY(-12px);
+    transition-duration: .5s;
+  }
+
+  /* ---------- shared type ---------- */
+  .eyebrow {
+    font-family: var(--f-mono);
+    font-size: clamp(10px, .95vw, 13px);
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--oxblood);
+    display: flex;
+    align-items: center;
+    gap: .7em;
+  }
+  .eyebrow::before {
+    content: "";
+    width: clamp(20px, 3vw, 40px);
+    height: 1px;
+    background: var(--oxblood);
+  }
+  h2.headline {
+    font-family: var(--f-display);
+    font-optical-sizing: auto;
+    font-weight: 500;
+    font-size: clamp(28px, 4.6vw, 62px);
+    line-height: 1.04;
+    letter-spacing: -.012em;
+    text-wrap: balance;
+    margin: .5em 0 .35em;
+    max-width: 20ch;
+  }
+  p.sub {
+    font-size: clamp(14px, 1.5vw, 21px);
+    line-height: 1.5;
+    color: var(--ink-soft);
+    max-width: 46ch;
+  }
+  .mono { font-family: var(--f-mono); }
+
+  /* ---------- HUD ---------- */
+  .hud {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 46px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 clamp(16px, 2.4vw, 30px);
+    font-family: var(--f-mono);
+    font-size: 11px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    background: linear-gradient(to top, var(--paper-2), transparent);
+    z-index: 40;
+  }
+  .hud .counter { font-variant-numeric: tabular-nums; }
+  .hud .title-tag { color: var(--ink); }
+  .hud .title-tag b { color: var(--oxblood); font-weight: 600; }
+
+  .track {
+    position: absolute;
+    left: 0; right: 0; bottom: 46px;
+    height: 2px;
+    background: var(--rule);
+    z-index: 40;
+  }
+  .track .fill {
+    height: 100%;
+    width: 0%;
+    background: var(--oxblood);
+  }
+
+  .controls {
+    position: absolute;
+    right: clamp(16px, 2.4vw, 30px);
+    bottom: 54px;
+    display: flex;
+    gap: 8px;
+    z-index: 50;
+  }
+  .controls button {
+    font-family: var(--f-mono);
+    font-size: 11px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--ink);
+    background: var(--card);
+    border: 1px solid var(--rule);
+    padding: 7px 12px;
+    cursor: pointer;
+    transition: background .2s, border-color .2s;
+  }
+  .controls button:hover { border-color: var(--oxblood); }
+  .controls button:focus-visible { outline: 2px solid var(--oxblood); outline-offset: 2px; }
+
+  /* ===================================================================
+     SCENE 1 — the dead checklist + redline stamp
+     =================================================================== */
+  #s1 { justify-content: center; align-items: center; text-align: center; }
+  .sheet {
+    position: relative;
+    width: min(62%, 560px);
+    background: var(--card);
+    border: 1px solid var(--rule);
+    box-shadow: 0 24px 50px -24px rgba(28,26,23,.4);
+    padding: clamp(20px, 3vw, 40px) clamp(24px, 3.6vw, 46px);
+    text-align: left;
+    transform: rotate(-1.4deg);
+  }
+  .sheet h3 {
+    font-family: var(--f-mono);
+    font-size: 12px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 14px;
+  }
+  .sheet ul { list-style: none; display: flex; flex-direction: column; gap: 11px; }
+  .sheet li {
+    font-family: var(--f-body);
+    font-size: clamp(13px, 1.4vw, 17px);
+    color: var(--ink-soft);
+    display: flex;
+    gap: 11px;
+    align-items: baseline;
+  }
+  .sheet li::before {
+    content: "";
+    flex: none;
+    width: 12px; height: 12px;
+    border: 1.5px solid var(--rule);
+    transform: translateY(2px);
+  }
+  .stamp {
+    position: absolute;
+    right: -6%;
+    top: 42%;
+    font-family: var(--f-display);
+    font-weight: 600;
+    font-size: clamp(20px, 2.9vw, 40px);
+    letter-spacing: .01em;
+    color: var(--oxblood);
+    border: 3px solid var(--oxblood);
+    padding: 6px 18px 8px;
+    text-transform: uppercase;
+    transform: rotate(-11deg) scale(2.4);
+    opacity: 0;
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--card) 82%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--oxblood) 25%, transparent) inset;
+  }
+  .s1-active .stamp {
+    animation: stampIn .5s var(--ease) .9s forwards;
+  }
+  @keyframes stampIn {
+    0%   { opacity: 0; transform: rotate(-11deg) scale(2.4); }
+    60%  { opacity: 1; transform: rotate(-11deg) scale(.92); }
+    80%  { transform: rotate(-11deg) scale(1.04); }
+    100% { opacity: 1; transform: rotate(-11deg) scale(1); }
+  }
+  .s1-caption {
+    margin-top: clamp(22px, 3vw, 40px);
+    font-family: var(--f-mono);
+    font-size: clamp(11px, 1.15vw, 14px);
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    opacity: 0;
+  }
+  .s1-active .s1-caption { animation: fadeUp .6s var(--ease) 1.5s forwards; }
+
+  /* ===================================================================
+     SCENE 2 — the thesis
+     =================================================================== */
+  #s2 .wordmark {
+    font-family: var(--f-mono);
+    font-size: clamp(11px, 1.1vw, 14px);
+    letter-spacing: .28em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin-bottom: .4em;
+  }
+  #s2 h2.headline em {
+    font-style: italic;
+    color: var(--oxblood);
+  }
+  #s2 .rule-row {
+    display: flex;
+    gap: 0;
+    margin-top: clamp(20px, 3vw, 38px);
+    border-top: 1px solid var(--rule);
+  }
+  #s2 .rule-row div {
+    flex: 1;
+    padding: 14px 18px 0 0;
+    font-family: var(--f-mono);
+    font-size: clamp(10px, 1vw, 13px);
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    border-top: 2px solid var(--oxblood);
+    margin-top: -1px;
+    max-width: 12ch;
+  }
+  #s2 .rule-row div:nth-child(2) { border-top-color: var(--brass); }
+  #s2 .rule-row div:nth-child(3) { border-top-color: var(--slate); }
+
+  /* ===================================================================
+     SCENE 3 — provide company info (mock app)
+     =================================================================== */
+  .app {
+    width: 100%;
+    max-width: 780px;
+    margin: 0 auto;
+    background: var(--card);
+    border: 1px solid var(--rule);
+    box-shadow: 0 30px 60px -30px rgba(28,26,23,.4);
+  }
+  .app .bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 11px 16px;
+    border-bottom: 1px solid var(--rule);
+    font-family: var(--f-mono);
+    font-size: 11px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+  }
+  .app .bar i { width: 9px; height: 9px; border-radius: 50%; background: var(--rule); display: inline-block; }
+  .app .bar i:nth-child(2) { background: color-mix(in srgb, var(--brass) 60%, var(--rule)); }
+  .app .bar span { margin-left: auto; }
+  .app .body { padding: clamp(20px, 3vw, 38px); }
+  .field-label {
+    font-family: var(--f-mono);
+    font-size: 11px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin-bottom: 9px;
+  }
+  .field {
+    border: 1px solid var(--rule);
+    background: var(--paper);
+    padding: 16px 18px;
+    font-family: var(--f-body);
+    font-size: clamp(14px, 1.5vw, 19px);
+    line-height: 1.55;
+    color: var(--ink);
+    min-height: 4.6em;
+  }
+  .field .cursor {
+    display: inline-block;
+    width: 2px;
+    height: 1.05em;
+    background: var(--oxblood);
+    transform: translateY(3px);
+    animation: blink 1s steps(1) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+  .field-row {
+    display: flex;
+    gap: 14px;
+    margin-top: 16px;
+    flex-wrap: wrap;
+  }
+  .pill {
+    font-family: var(--f-mono);
+    font-size: 12px;
+    letter-spacing: .06em;
+    padding: 7px 12px;
+    border: 1px solid var(--rule);
+    color: var(--ink-soft);
+    text-transform: uppercase;
+  }
+  .analyze-btn {
+    margin-top: 22px;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--f-mono);
+    font-size: 13px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--paper);
+    background: var(--oxblood);
+    border: none;
+    padding: 13px 22px;
+    transition: transform .12s var(--ease);
+  }
+  .analyze-btn.press { transform: scale(.96); }
+
+  /* ===================================================================
+     SCENE 4 — RAG retrieval diagram
+     =================================================================== */
+  #s4 .diagram {
+    width: 100%;
+    max-width: 880px;
+    margin: clamp(14px,2vw,26px) auto 0;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr auto 1fr;
+    align-items: center;
+    gap: clamp(10px, 1.8vw, 26px);
+  }
+  .node-box {
+    border: 1px solid var(--rule);
+    background: var(--card);
+    padding: 16px 14px;
+    text-align: center;
+    font-family: var(--f-mono);
+    font-size: clamp(10px, 1vw, 12.5px);
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+  }
+  .node-box b { display: block; color: var(--ink); font-size: 1.15em; margin-bottom: 4px; letter-spacing: .04em; }
+  .kb {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+  .chunk {
+    border: 1px solid var(--rule);
+    background: var(--paper);
+    padding: 8px 11px;
+    font-family: var(--f-mono);
+    font-size: clamp(9px, .92vw, 11.5px);
+    letter-spacing: .04em;
+    color: var(--ink-soft);
+    text-align: left;
+    opacity: .4;
+    transition: opacity .4s, border-color .4s, background .4s, transform .5s var(--ease);
+  }
+  #s4.s4-active .chunk.hot {
+    opacity: 1;
+    border-color: var(--oxblood);
+    background: color-mix(in srgb, var(--oxblood) 8%, var(--card));
+  }
+  .arrow {
+    font-family: var(--f-mono);
+    color: var(--oxblood);
+    font-size: clamp(14px, 1.8vw, 22px);
+    text-align: center;
+    opacity: .35;
+  }
+  #s4.s4-active .arrow { animation: pulseArrow 1.6s ease-in-out infinite; }
+  @keyframes pulseArrow { 0%,100% { opacity: .3; } 50% { opacity: 1; } }
+  #s4 .readout {
+    margin-top: clamp(16px, 2.4vw, 30px);
+    text-align: center;
+    font-family: var(--f-mono);
+    font-size: clamp(10px, 1.05vw, 13px);
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+  }
+  #s4 .readout b { color: var(--oxblood); }
+
+  /* ===================================================================
+     SCENE 5 — top-10 questions cascade
+     =================================================================== */
+  #s5 .qwrap {
+    width: 100%;
+    max-width: 860px;
+    margin: clamp(10px,1.6vw,20px) auto 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .qrow {
+    display: grid;
+    grid-template-columns: 2.4em 1fr auto;
+    align-items: center;
+    gap: 14px;
+    padding: 11px 14px;
+    border: 1px solid var(--rule);
+    background: var(--card);
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  #s5.s5-active .qrow { animation: slideIn .5s var(--ease) forwards; }
+  .qrow.lead {
+    border-color: var(--oxblood);
+    background: color-mix(in srgb, var(--oxblood) 7%, var(--card));
+  }
+  .qrow .rank {
+    font-family: var(--f-mono);
+    font-size: clamp(12px, 1.3vw, 16px);
+    font-variant-numeric: tabular-nums;
+    color: var(--oxblood);
+    font-weight: 600;
+  }
+  .qrow .qtext {
+    font-family: var(--f-body);
+    font-size: clamp(12px, 1.35vw, 16.5px);
+    line-height: 1.35;
+    color: var(--ink);
+  }
+  .qrow .chips { display: flex; gap: 6px; flex: none; }
+  .chip {
+    font-family: var(--f-mono);
+    font-size: 9.5px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    padding: 4px 7px;
+    border: 1px solid var(--rule);
+    color: var(--ink-soft);
+    white-space: nowrap;
+  }
+  .chip.hi { color: var(--crit); border-color: color-mix(in srgb, var(--crit) 40%, var(--rule)); }
+  .chip.md { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--rule)); }
+
+  /* ===================================================================
+     SCENE 6 — agentic follow-up (LangGraph)
+     =================================================================== */
+  #s6 .convo {
+    width: 100%;
+    max-width: 820px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .turn { display: flex; flex-direction: column; gap: 4px; opacity: 0; transform: translateY(8px); }
+  #s6.s6-active .turn { animation: fadeUp .5s var(--ease) forwards; }
+  .turn .who {
+    font-family: var(--f-mono);
+    font-size: 10px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+  }
+  .turn .msg {
+    font-family: var(--f-body);
+    font-size: clamp(13px, 1.45vw, 18px);
+    line-height: 1.5;
+    padding: 12px 16px;
+    border: 1px solid var(--rule);
+    background: var(--card);
+    color: var(--ink);
+  }
+  .turn.q .msg { border-left: 3px solid var(--brass); }
+  .turn.a .msg { border-left: 3px solid var(--slate); color: var(--ink-soft); }
+  .turn.fu .msg { border-left: 3px solid var(--oxblood); background: color-mix(in srgb, var(--oxblood) 7%, var(--card)); }
+
+  .graph {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    margin: 6px auto;
+    opacity: 0;
+  }
+  #s6.s6-active .graph { animation: fadeUp .5s var(--ease) 1.2s forwards; }
+  .gnode {
+    font-family: var(--f-mono);
+    font-size: clamp(9px, .95vw, 11.5px);
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    padding: 8px 12px;
+    border: 1px solid var(--oxblood);
+    color: var(--oxblood);
+    background: var(--card);
+    position: relative;
+    white-space: nowrap;
+  }
+  .gconn {
+    width: clamp(26px, 4vw, 56px);
+    height: 1px;
+    background: var(--oxblood);
+    position: relative;
+    opacity: .5;
+  }
+  .gconn::after {
+    content: "";
+    position: absolute;
+    top: -2px; left: 0;
+    width: 6px; height: 5px;
+    background: var(--oxblood);
+  }
+  #s6.s6-active .gconn::after { animation: travel 1.8s linear 1.6s infinite; }
+  @keyframes travel { from { left: 0; } to { left: 100%; } }
+  .grepair {
+    font-family: var(--f-mono);
+    font-size: 9px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin-left: 12px;
+    padding-left: 12px;
+    border-left: 1px dashed var(--rule);
+  }
+
+  /* ===================================================================
+     SCENE 7 — conversation adapts / contradiction
+     =================================================================== */
+  #s7 .stack {
+    width: 100%;
+    max-width: 820px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .flag {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 14px 16px;
+    border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--rule));
+    background: color-mix(in srgb, var(--warn) 9%, var(--card));
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  #s7.s7-active .flag { animation: fadeUp .55s var(--ease) 1.3s forwards; }
+  .flag .tag {
+    font-family: var(--f-mono);
+    font-size: 10px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--warn);
+    flex: none;
+    padding-top: 2px;
+  }
+  .flag .detail {
+    font-family: var(--f-body);
+    font-size: clamp(12px, 1.35vw, 16px);
+    line-height: 1.45;
+    color: var(--ink);
+  }
+  .flag .detail b { color: var(--warn); font-weight: 600; }
+
+  /* ===================================================================
+     SCENE 8 — risk report
+     =================================================================== */
+  #s8 .report {
+    width: 100%;
+    max-width: 940px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: clamp(20px, 3.4vw, 44px);
+    align-items: center;
+  }
+  .dial {
+    position: relative;
+    width: clamp(140px, 17vw, 210px);
+    aspect-ratio: 1;
+    display: grid;
+    place-items: center;
+  }
+  .dial svg { position: absolute; inset: 0; transform: rotate(-90deg); }
+  .dial .score {
+    font-family: var(--f-display);
+    font-weight: 600;
+    font-size: clamp(34px, 5vw, 60px);
+    line-height: 1;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+  }
+  .dial .of {
+    font-family: var(--f-mono);
+    font-size: 11px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin-top: 4px;
+  }
+  .dial .risk {
+    position: absolute;
+    bottom: -8px;
+    font-family: var(--f-mono);
+    font-size: 11px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--paper);
+    background: var(--warn);
+    padding: 4px 10px;
+  }
+  #s8 .cats {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+  }
+  .catrow {
+    display: grid;
+    grid-template-columns: 8.5em 1fr 2.4em;
+    align-items: center;
+    gap: 12px;
+    font-family: var(--f-mono);
+    font-size: clamp(9.5px, 1vw, 12px);
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+  }
+  .catrow .bar {
+    height: 8px;
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    position: relative;
+    overflow: hidden;
+  }
+  .catrow .bar i {
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 0%;
+    background: var(--brass);
+    transition: width 1s var(--ease);
+  }
+  .catrow .bar i.weak { background: var(--high); }
+  .catrow .bar i.strong { background: var(--ok); }
+  .catrow .val { color: var(--ink); font-variant-numeric: tabular-nums; text-align: right; }
+
+  #s8 .panels {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-top: clamp(14px, 2vw, 22px);
+  }
+  .panel {
+    border: 1px solid var(--rule);
+    background: var(--card);
+    padding: 13px 15px;
+  }
+  .panel h4 {
+    font-family: var(--f-mono);
+    font-size: 10px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--oxblood);
+    margin-bottom: 8px;
+  }
+  .panel li {
+    list-style: none;
+    font-family: var(--f-body);
+    font-size: clamp(11px, 1.2vw, 14px);
+    line-height: 1.4;
+    color: var(--ink-soft);
+    padding: 5px 0;
+    border-top: 1px solid var(--rule);
+  }
+  .panel li:first-of-type { border-top: none; }
+
+  /* ===================================================================
+     SCENE 9 — closing thesis
+     =================================================================== */
+  #s9 { align-items: center; text-align: center; }
+  #s9 .close-mark {
+    font-family: var(--f-mono);
+    font-size: clamp(11px, 1.1vw, 14px);
+    letter-spacing: .3em;
+    text-transform: uppercase;
+    color: var(--oxblood);
+    margin-bottom: 1em;
+  }
+  #s9 h2 {
+    font-family: var(--f-display);
+    font-weight: 500;
+    font-size: clamp(26px, 4.4vw, 58px);
+    line-height: 1.08;
+    letter-spacing: -.012em;
+    text-wrap: balance;
+    max-width: 22ch;
+  }
+  #s9 h2 em { font-style: italic; color: var(--oxblood); }
+  #s9 .stripe {
+    display: flex;
+    gap: 0;
+    margin-top: clamp(24px, 3.4vw, 44px);
+  }
+  #s9 .stripe span {
+    font-family: var(--f-mono);
+    font-size: clamp(9.5px, 1vw, 12.5px);
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    padding: 10px 16px;
+    border-top: 2px solid var(--oxblood);
+  }
+  #s9 .stripe span:nth-child(2) { border-top-color: var(--brass); }
+  #s9 .stripe span:nth-child(3) { border-top-color: var(--slate); }
+
+  /* ---------- keyframes ---------- */
+  @keyframes fadeUp { to { opacity: 1; transform: none; } }
+  @keyframes slideIn { to { opacity: 1; transform: none; } }
+
+  /* ---------- reduced motion ---------- */
+  @media (prefers-reduced-motion: reduce) {
+    .scene, .scene.active, .scene.leaving { transition: opacity .2s linear; transform: none !important; }
+    .stamp, .s1-caption, .qrow, .turn, .graph, .flag,
+    #s4 .chunk, .arrow, .gconn::after {
+      animation: none !important;
+      opacity: 1 !important;
+      transform: none !important;
+    }
+    .field .cursor { animation: none; }
+  }
+
+  /* ---------- small screens: keep the film legible ---------- */
+  @media (max-width: 560px) {
+    body { background-size: 30px 30px; }
+    #s4 .diagram { grid-template-columns: 1fr; }
+    #s4 .arrow { transform: rotate(90deg); }
+    #s8 .report { grid-template-columns: 1fr; justify-items: center; }
+    #s8 .panels { grid-template-columns: 1fr; }
+    .qrow { grid-template-columns: 2em 1fr; }
+    .qrow .chips { grid-column: 2; }
+  }
+</style>
+
+<div class="stage" id="stage" role="img" aria-label="Promotional film for the RAG Question Generator — an AI due-diligence assistant that grounds its questions in a real checklist, adapts follow-ups to each answer, and produces a scored risk report.">
+
+  <!-- ============ SCENE 1 ============ -->
+  <section class="scene" id="s1" data-dur="7600">
+    <div class="sheet">
+      <h3>Investor Question List — v1</h3>
+      <ul>
+        <li>What is your annual revenue?</li>
+        <li>Who are your competitors?</li>
+        <li>How big is your team?</li>
+        <li>What is your business model?</li>
+        <li>How do you acquire customers?</li>
+      </ul>
+      <div class="stamp">Generic</div>
+    </div>
+    <div class="s1-caption">The same list for every company &nbsp;·&nbsp; it never asks the second question</div>
+  </section>
+
+  <!-- ============ SCENE 2 ============ -->
+  <section class="scene" id="s2" data-dur="7200">
+    <div class="wordmark">RAG Question Generator</div>
+    <div class="eyebrow">The premise</div>
+    <h2 class="headline">Due diligence that <em>follows the evidence</em>, not a template.</h2>
+    <p class="sub">A retrieval-grounded, agentic line of questioning — it reads what the company tells you, checks it against a real due-diligence checklist, and decides what to ask next.</p>
+    <div class="rule-row">
+      <div>Grounded in a real checklist</div>
+      <div>Adaptive to every answer</div>
+      <div>Auditable by design</div>
+    </div>
+  </section>
+
+  <!-- ============ SCENE 3 ============ -->
+  <section class="scene" id="s3" data-dur="9000">
+    <div class="eyebrow">Step 01 &nbsp;/&nbsp; provide the company</div>
+    <div class="app" style="margin-top:clamp(14px,2vw,26px)">
+      <div class="bar"><i></i><i></i><i></i><span>POST /sessions</span></div>
+      <div class="body">
+        <div class="field-label">Company information</div>
+        <div class="field" id="typeField"><span id="typed"></span><span class="cursor"></span></div>
+        <div class="field-row">
+          <span class="pill">Stage — Series A</span>
+          <span class="pill">Sector — On-demand delivery</span>
+        </div>
+        <button class="analyze-btn" id="analyzeBtn">Analyze &nbsp;→</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ SCENE 4 ============ -->
+  <section class="scene" id="s4" data-dur="8400">
+    <div class="eyebrow">Step 02 &nbsp;/&nbsp; retrieval</div>
+    <h2 class="headline" style="font-size:clamp(22px,3.3vw,40px);max-width:24ch">It pulls the parts of the checklist that match this company.</h2>
+    <div class="diagram">
+      <div class="node-box"><b>Company info</b>Series A · delivery · ₹4 Cr ARR · 3 cities</div>
+      <div class="arrow">→</div>
+      <div class="kb" aria-hidden="true">
+        <div class="chunk">§ Revenue concentration &amp; churn</div>
+        <div class="chunk hot">§ Customer concentration risk</div>
+        <div class="chunk">§ Cohort retention benchmarks</div>
+        <div class="chunk hot">§ Unit economics — contribution margin</div>
+        <div class="chunk hot">§ Market red flags</div>
+        <div class="chunk">§ Cap table &amp; option pool</div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="node-box"><b>Grounded prompt</b>3 checklist sections + company info</div>
+    </div>
+    <div class="readout">ChromaDB &nbsp;·&nbsp; <b>similarity_search(startup_info, k=10)</b> &nbsp;·&nbsp; local MiniLM embeddings</div>
+  </section>
+
+  <!-- ============ SCENE 5 ============ -->
+  <section class="scene" id="s5" data-dur="9000">
+    <div class="eyebrow">Step 03 &nbsp;/&nbsp; the ten questions</div>
+    <div class="qwrap">
+      <div class="qrow lead"><span class="rank">01</span><span class="qtext">What share of revenue comes from your top five customers, and how has that concentration moved over the last four quarters?</span><span class="chips"><span class="chip">Financial</span><span class="chip hi">High</span></span></div>
+      <div class="qrow"><span class="rank">02</span><span class="qtext">What is contribution margin per order after rider payout, and at what order volume does a city turn profitable?</span><span class="chips"><span class="chip">Traction</span><span class="chip hi">High</span></span></div>
+      <div class="qrow"><span class="rank">03</span><span class="qtext">Which of your three cities is most mature, and what does its 6-month cohort retention look like?</span><span class="chips"><span class="chip">Market</span><span class="chip hi">High</span></span></div>
+      <div class="qrow"><span class="rank">04</span><span class="qtext">How is the founding team's equity split, and is there full vesting with a cliff in place?</span><span class="chips"><span class="chip">Team</span><span class="chip md">Medium</span></span></div>
+      <div class="qrow"><span class="rank">05</span><span class="qtext">What contractual exclusivity, if any, do you have with the restaurants driving most order volume?</span><span class="chips"><span class="chip">Legal</span><span class="chip md">Medium</span></span></div>
+      <div class="qrow"><span class="rank">06</span><span class="qtext">What is current monthly burn, and how many months of runway remain at today's spend?</span><span class="chips"><span class="chip">Financial</span><span class="chip hi">High</span></span></div>
+    </div>
+  </section>
+
+  <!-- ============ SCENE 6 ============ -->
+  <section class="scene" id="s6" data-dur="10200">
+    <div class="eyebrow">Step 04 &nbsp;/&nbsp; the follow-up decision</div>
+    <div class="convo">
+      <div class="turn q"><span class="who">Question 01</span><span class="msg">What share of revenue comes from your top five customers?</span></div>
+      <div class="turn a" style="animation-delay:.35s"><span class="who">Founder</span><span class="msg">Roughly 60% sits with our top two restaurant chains right now.</span></div>
+      <div class="graph" aria-label="LangGraph decision: analyze the answer, find the gap, generate a follow-up, with a repair loop on malformed output">
+        <span class="gnode">Analyze</span>
+        <span class="gconn"></span>
+        <span class="gnode">Gap found</span>
+        <span class="gconn"></span>
+        <span class="gnode">Generate</span>
+        <span class="grepair">repair&nbsp;loop&nbsp;↺</span>
+      </div>
+      <div class="turn fu" style="animation-delay:1.9s"><span class="who">Generated follow-up</span><span class="msg">60% across two accounts is a concentration risk. What is the contractual notice period on those two, and what would a single churn do to monthly revenue?</span></div>
+    </div>
+  </section>
+
+  <!-- ============ SCENE 7 ============ -->
+  <section class="scene" id="s7" data-dur="8600">
+    <div class="eyebrow">Step 05 &nbsp;/&nbsp; the thread adapts</div>
+    <div class="stack">
+      <div class="turn a" style="opacity:1;transform:none"><span class="who">Founder — follow-up 1</span><span class="msg">30-day notice on both. We'd lose about a third of revenue overnight if one left.</span></div>
+      <div class="turn q" style="opacity:1;transform:none"><span class="who">Follow-up 2</span><span class="msg">Earlier you put ARR at ₹4 crore — a one-third loss implies ~₹1.3 crore per account. Does that reconcile?</span></div>
+      <div class="turn a" style="opacity:1;transform:none"><span class="who">Founder</span><span class="msg">Actually ARR is closer to ₹3.2 crore this quarter — the ₹4 crore figure was the annualised run-rate from our best month.</span></div>
+      <div class="flag">
+        <span class="tag">Contradiction</span>
+        <span class="detail">ARR stated as <b>₹4 crore</b>, later revised to <b>₹3.2 crore</b>. Flagged, carried into the report, and escalated to a risk.</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ SCENE 8 ============ -->
+  <section class="scene" id="s8" data-dur="10500">
+    <div class="eyebrow">Step 06 &nbsp;/&nbsp; the risk report</div>
+    <div class="report">
+      <div class="dial" id="dial">
+        <svg viewBox="0 0 120 120" aria-hidden="true">
+          <circle cx="60" cy="60" r="52" fill="none" stroke="var(--rule)" stroke-width="8"></circle>
+          <circle id="dialArc" cx="60" cy="60" r="52" fill="none" stroke="var(--warn)" stroke-width="8"
+                  stroke-linecap="butt" stroke-dasharray="326.7" stroke-dashoffset="326.7"></circle>
+        </svg>
+        <div class="score" id="scoreNum">0.0</div>
+        <div class="of">Overall / 10</div>
+        <div class="risk">Risk — Medium</div>
+      </div>
+      <div class="cats" id="cats">
+        <div class="catrow"><span>Traction</span><span class="bar"><i data-w="52" class="weak"></i></span><span class="val">5.2</span></div>
+        <div class="catrow"><span>Financials</span><span class="bar"><i data-w="41" class="weak"></i></span><span class="val">4.1</span></div>
+        <div class="catrow"><span>Market</span><span class="bar"><i data-w="68"></i></span><span class="val">6.8</span></div>
+        <div class="catrow"><span>Team</span><span class="bar"><i data-w="75" class="strong"></i></span><span class="val">7.5</span></div>
+        <div class="catrow"><span>Risk</span><span class="bar"><i data-w="35" class="weak"></i></span><span class="val">3.5</span></div>
+      </div>
+      <div class="panels">
+        <div class="panel">
+          <h4>Risks</h4>
+          <ul>
+            <li>Revenue concentration — 60% across two accounts, 30-day notice</li>
+            <li>Inconsistent ARR figures undermine reported traction</li>
+          </ul>
+        </div>
+        <div class="panel">
+          <h4>Information gaps</h4>
+          <ul>
+            <li>No cohort retention data provided for any city</li>
+            <li>Contribution margin per order not disclosed</li>
+          </ul>
+        </div>
+        <div class="panel">
+          <h4>Recommendations</h4>
+          <ul>
+            <li>Request signed contracts for the top two accounts</li>
+            <li>Reconcile ARR against bank-verified monthly revenue</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ SCENE 9 ============ -->
+  <section class="scene" id="s9" data-dur="7500">
+    <div class="close-mark">RAG Question Generator</div>
+    <h2>The questions a sharp analyst would ask <em>next</em> — every time.</h2>
+    <div class="stripe">
+      <span>Grounded</span>
+      <span>Adaptive</span>
+      <span>Auditable</span>
+    </div>
+  </section>
+
+  <!-- ============ HUD ============ -->
+  <div class="track"><div class="fill" id="trackFill"></div></div>
+  <div class="controls">
+    <button id="btnReplay" type="button">↺ Replay</button>
+    <button id="btnPause" type="button">❚❚ Pause</button>
+  </div>
+  <div class="hud">
+    <span class="title-tag">RAG&nbsp;<b>·</b>&nbsp;Due-Diligence Questioning</span>
+    <span class="counter" id="counter">01 / 09</span>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var scenes = Array.prototype.slice.call(document.querySelectorAll(".scene"));
+  var counter = document.getElementById("counter");
+  var trackFill = document.getElementById("trackFill");
+  var btnReplay = document.getElementById("btnReplay");
+  var btnPause = document.getElementById("btnPause");
+  var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  var durations = scenes.map(function (s) { return parseInt(s.getAttribute("data-dur"), 10) || 8000; });
+  var total = durations.reduce(function (a, b) { return a + b; }, 0);
+
+  var idx = -1;
+  var sceneStart = 0;
+  var paused = false;
+  var rafId = null;
+  var lastT = 0;
+  var elapsed = 0;
+
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+
+  function runSceneHooks(i) {
+    var s = scenes[i];
+    var id = s.id;
+    if (id === "s1") s.classList.add("s1-active");
+    if (id === "s3") typeCompanyInfo();
+    if (id === "s4") s.classList.add("s4-active");
+    if (id === "s5") cascadeQuestions();
+    if (id === "s6") s.classList.add("s6-active");
+    if (id === "s7") s.classList.add("s7-active");
+    if (id === "s8") animateReport();
+  }
+  function clearSceneHooks(i) {
+    var s = scenes[i];
+    s.classList.remove("s1-active", "s4-active", "s5-active", "s6-active", "s7-active");
+    if (s.id === "s3") { var t = document.getElementById("typed"); if (t) t.textContent = ""; }
+    if (s.id === "s5") {
+      Array.prototype.forEach.call(s.querySelectorAll(".qrow"), function (r) { r.style.animationDelay = ""; });
+    }
+    if (s.id === "s8") resetReport();
+  }
+
+  function show(i) {
+    if (i === idx) return;
+    if (idx >= 0) {
+      scenes[idx].classList.remove("active");
+      scenes[idx].classList.add("leaving");
+      clearSceneHooks(idx);
+      (function (prev) { setTimeout(function () { scenes[prev].classList.remove("leaving"); }, 650); })(idx);
+    }
+    idx = i;
+    var s = scenes[idx];
+    s.classList.add("active");
+    counter.textContent = pad(idx + 1) + " / " + pad(scenes.length);
+    runSceneHooks(idx);
+  }
+
+  function frame(t) {
+    if (!lastT) lastT = t;
+    var dt = t - lastT;
+    lastT = t;
+    if (!paused) {
+      elapsed += dt;
+      if (elapsed >= total) elapsed = total;
+
+      // find current scene by cumulative time
+      var acc = 0, target = 0;
+      for (var i = 0; i < durations.length; i++) {
+        if (elapsed < acc + durations[i] || i === durations.length - 1) { target = i; break; }
+        acc += durations[i];
+      }
+      if (target !== idx) { sceneStart = acc; show(target); }
+      trackFill.style.width = (elapsed / total * 100).toFixed(2) + "%";
+
+      if (elapsed >= total) {
+        paused = true;
+        btnPause.textContent = "▶ Play";
+        return;
+      }
+    }
+    rafId = requestAnimationFrame(frame);
+  }
+
+  function start() {
+    cancelAnimationFrame(rafId);
+    scenes.forEach(function (s, i) { s.classList.remove("active", "leaving"); clearSceneHooks(i); });
+    idx = -1; elapsed = 0; lastT = 0; sceneStart = 0; paused = false;
+    btnPause.textContent = "❚❚ Pause";
+    show(0);
+    rafId = requestAnimationFrame(frame);
+  }
+
+  btnReplay.addEventListener("click", start);
+  btnPause.addEventListener("click", function () {
+    if (elapsed >= total) { start(); return; }
+    paused = !paused;
+    btnPause.textContent = paused ? "▶ Play" : "❚❚ Pause";
+    if (!paused) { lastT = 0; rafId = requestAnimationFrame(frame); }
+  });
+
+  document.addEventListener("keydown", function (e) {
+    if (e.key === " ") { e.preventDefault(); btnPause.click(); }
+    if (e.key === "r" || e.key === "R") start();
+  });
+
+  /* ---------- scene-specific animations ---------- */
+  var COMPANY_TEXT =
+    "Swish is an on-demand food delivery company operating in 3 Indian cities. " +
+    "Series A. ~₹4 crore ARR. About 60% of orders come through our two largest restaurant chains.";
+
+  function typeCompanyInfo() {
+    var el = document.getElementById("typed");
+    var btn = document.getElementById("analyzeBtn");
+    if (!el) return;
+    el.textContent = "";
+    if (reduce) { el.textContent = COMPANY_TEXT; return; }
+    var n = 0;
+    var iv = setInterval(function () {
+      n += 2;
+      el.textContent = COMPANY_TEXT.slice(0, n);
+      if (n >= COMPANY_TEXT.length) {
+        clearInterval(iv);
+        setTimeout(function () {
+          if (!btn) return;
+          btn.classList.add("press");
+          setTimeout(function () { btn.classList.remove("press"); }, 160);
+        }, 500);
+      }
+    }, 34);
+    typeCompanyInfo._iv = iv;
+  }
+
+  function cascadeQuestions() {
+    var s = document.getElementById("s5");
+    s.classList.add("s5-active");
+    if (reduce) return;
+    var rows = s.querySelectorAll(".qrow");
+    Array.prototype.forEach.call(rows, function (r, i) {
+      r.style.animationDelay = (i * 0.22 + 0.1).toFixed(2) + "s";
+    });
+  }
+
+  var ARC_LEN = 326.7;
+  function animateReport() {
+    var arc = document.getElementById("dialArc");
+    var num = document.getElementById("scoreNum");
+    var bars = document.querySelectorAll("#s8 .catrow .bar i");
+    var targetScore = 5.4;
+    if (reduce) {
+      arc.style.strokeDashoffset = (ARC_LEN * (1 - targetScore / 10)).toFixed(1);
+      num.textContent = targetScore.toFixed(1);
+      Array.prototype.forEach.call(bars, function (b) { b.style.width = b.getAttribute("data-w") + "%"; });
+      return;
+    }
+    // dial
+    var startTs = null, dur = 1400;
+    function step(ts) {
+      if (!startTs) startTs = ts;
+      var p = Math.min(1, (ts - startTs) / dur);
+      var eased = 1 - Math.pow(1 - p, 3);
+      arc.style.strokeDashoffset = (ARC_LEN * (1 - (targetScore / 10) * eased)).toFixed(1);
+      num.textContent = (targetScore * eased).toFixed(1);
+      if (p < 1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+    // bars
+    setTimeout(function () {
+      Array.prototype.forEach.call(bars, function (b, i) {
+        setTimeout(function () { b.style.width = b.getAttribute("data-w") + "%"; }, i * 120);
+      });
+    }, 300);
+  }
+  function resetReport() {
+    var arc = document.getElementById("dialArc");
+    var num = document.getElementById("scoreNum");
+    if (arc) arc.style.strokeDashoffset = ARC_LEN;
+    if (num) num.textContent = "0.0";
+    Array.prototype.forEach.call(document.querySelectorAll("#s8 .catrow .bar i"), function (b) { b.style.width = "0%"; });
+  }
+
+  start();
+})();
+</script>

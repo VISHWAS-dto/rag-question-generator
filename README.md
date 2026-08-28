@@ -6,6 +6,13 @@ Before investing, an investor has to ask a young company a lot of careful
 questions to check it is a good, honest, safe bet. That homework is called
 **due diligence**. This tool does that homework for you.
 
+## Demo film
+
+A self-playing ~78-second product demo lives at
+[`demo/promo.html`](demo/promo.html) — open it in a browser, no server
+needed. See [`demo/README.md`](demo/README.md) for what it covers and how to
+screen-record it to MP4.
+
 ## What it does
 
 1. **Makes the questions.** You type a few lines about a company. The tool
