@@ -7,9 +7,11 @@ requires-python = ">=3.11,<3.13"
 license = { text = "Proprietary" }
 
 # --- Core dependencies: shared by the `app` and `rag` services ---
-# Kept intentionally small. Heavy ML/retrieval libraries live in the
-# `rag` optional-dependency group so the `app` image does not pull torch,
-# sentence-transformers, or chromadb.
+# The RAG runtime (rag_service.*) is importable in-process by the `app`
+# service when APP_RAG_MODE=in_process (the local/single-node default), so
+# every package rag_service imports at runtime must be a core dependency,
+# not an optional extra. The `rag` extra below is retained for the
+# standalone rag-service image build.
 dependencies = [
     "fastapi>=0.115,<0.116",
     "uvicorn[standard]>=0.32,<0.33",
@@ -20,6 +22,12 @@ dependencies = [
     "tenacity>=9.0,<10",
     "sqlalchemy>=2.0.36,<2.1",
     "alembic>=1.14,<2",
+    # --- RAG runtime (embeddings + vector store + retrieval + ingestion) ---
+    "chromadb>=0.5.23",
+    "sentence-transformers>=3.4.1",
+    "langchain-text-splitters>=0.3,<0.4",
+    "beautifulsoup4>=4.12,<5",
+    "requests>=2.32,<3",
 ]
 
 [project.optional-dependencies]
