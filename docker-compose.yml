@@ -1,0 +1,95 @@
+# Base composition: app + rag + postgres + frontend.
+#
+# This file is environment-agnostic. It uses an ECHO LLM by default so the
+# whole stack runs with no GPU and no external API. Bring a real self-hosted
+# model with `docker compose -f docker-compose.yml -f docker-compose.prod.yml up`
+# (adds the vLLM service and switches the app to it). Local hot-reload overrides
+# live in docker-compose.override.yml (loaded automatically by `docker compose up`).
+#
+# Scale a service:  docker compose up --scale app=4 --scale rag=2
+
+x-app-env: &app-env
+  APP_ENVIRONMENT: ${APP_ENVIRONMENT:-local}
+  APP_LOG_LEVEL: ${APP_LOG_LEVEL:-INFO}
+  APP_DATABASE_URL: postgresql+psycopg://dd:dd@postgres:5432/duediligence
+  APP_LLM_PROVIDER: ${APP_LLM_PROVIDER:-echo}
+  APP_LLM_BASE_URL: ${APP_LLM_BASE_URL:-http://llm:8000/v1}
+  APP_LLM_API_KEY: ${APP_LLM_API_KEY:-not-needed}
+  APP_LLM_MODEL: ${APP_LLM_MODEL:-meta-llama/Llama-3.1-8B-Instruct}
+  APP_RAG_MODE: http
+  APP_RAG_BASE_URL: http://rag:8100
+  APP_CORS_ALLOW_ORIGINS: ${APP_CORS_ALLOW_ORIGINS:-*}
+  APP_READINESS_CHECK_DEPENDENCIES: "true"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: dd
+      POSTGRES_PASSWORD: dd
+      POSTGRES_DB: duediligence
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dd -d duediligence"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  rag:
+    build:
+      context: .
+      dockerfile: docker/rag.Dockerfile
+    environment:
+      RAG_ENVIRONMENT: ${APP_ENVIRONMENT:-local}
+      RAG_LOG_LEVEL: ${APP_LOG_LEVEL:-INFO}
+      RAG_CHROMA_MODE: embedded
+      RAG_CHROMA_PERSIST_DIR: /data/chroma
+      RAG_SOURCE_URL: ${RAG_SOURCE_URL:-https://www.startupscience.io/articles/startup-due-diligence-checklist}
+    volumes:
+      - ragdata:/data/chroma
+    restart: unless-stopped
+
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/app.Dockerfile
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      <<: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  app:
+    build:
+      context: .
+      dockerfile: docker/app.Dockerfile
+    environment:
+      <<: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      rag:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+    environment:
+      API_BASE_URL: /api
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  ragdata:

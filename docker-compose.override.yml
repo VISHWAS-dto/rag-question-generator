@@ -1,0 +1,30 @@
+# Local development overrides. Loaded automatically by `docker compose up`.
+# - source is bind-mounted for hot reload
+# - app port is published for direct access / API docs
+# - rag port is published so scripts/ingest_knowledge_base.py can reach it
+
+services:
+  app:
+    command:
+      ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload",
+       "--reload-dir", "app", "--reload-dir", "shared"]
+    environment:
+      APP_LOG_JSON: "false"
+    volumes:
+      - ./app:/app/app
+      - ./shared:/app/shared
+      - ./migrations:/app/migrations
+    ports:
+      - "8000:8000"
+
+  rag:
+    command:
+      ["uvicorn", "rag_service.main:app", "--host", "0.0.0.0", "--port", "8100", "--reload",
+       "--reload-dir", "rag_service", "--reload-dir", "shared"]
+    environment:
+      RAG_LOG_JSON: "false"
+    volumes:
+      - ./rag_service:/app/rag_service
+      - ./shared:/app/shared
+    ports:
+      - "8100:8100"
