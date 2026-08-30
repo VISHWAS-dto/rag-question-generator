@@ -1,4 +1,5 @@
 .env
+.env.local
 __pycache__/
 *.pyc
 .venv/
@@ -6,6 +7,15 @@ venv/
 myenv/
 chroma_db/
 data/chroma/
-data/phase2.db
+data/*.db
+data/app.db
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 *.egg-info/
+.DS_Store
+
+dist/
+*.whl

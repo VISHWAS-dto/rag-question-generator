@@ -1,139 +1,150 @@
-# RAG Question Generator
+# RAG Due-Diligence Engine
 
-A helper for people who invest money in startups.
+Generates the top-N due-diligence questions for a startup, runs an interactive
+follow-up interview, and produces a scored, evidence-grounded investor report.
 
-Before investing, an investor has to ask a young company a lot of careful
-questions to check it is a good, honest, safe bet. That homework is called
-**due diligence**. This tool does that homework for you.
+The AI only produces qualitative findings in words. Every numeric score and the
+overall risk level are computed by fixed Python rules, so they are consistent
+and auditable.
 
-## Demo film
+## Architecture
 
-A self-playing ~78-second product demo lives at
-[`demo/promo.html`](demo/promo.html) — open it in a browser, no server
-needed. See [`demo/README.md`](demo/README.md) for what it covers and how to
-screen-record it to MP4.
-
-## What it does
-
-1. **Makes the questions.** You type a few lines about a company. The tool
-   writes the **10 most important questions** to ask it, in order of
-   importance.
-2. **Runs the interview.** It asks those questions one at a time. After each
-   answer it decides: is this clear enough, or should I ask a smart
-   follow-up? It also notices when two answers don't match and asks about it.
-3. **Writes the report.** When the interview is done, it produces a report
-   with an overall score (0–10), a risk level (LOW / MEDIUM / HIGH /
-   CRITICAL), the strengths, the risks, the missing information, the
-   contradictions, and recommended next steps.
-
-The AI only gives opinions in words. The final scores are worked out by
-fixed rules, so they are consistent and repeatable.
-
-## How it's built
-
-The project has three phases, each building on the last:
-
-| Phase | Name | What it adds |
-|-------|------|--------------|
-| 1 | The 10 Questions | Company info in → 10 ranked questions out. Nothing saved. |
-| 2 | The Interview | Turns the questions into a live Q&A with follow-ups. Saves the conversation. |
-| 3 | The Report | Reads the finished interview and produces the scored report. |
-
-## Tech in one line each
-
-- **RAG** – looks up a real published due-diligence checklist first, then
-  gives it to the AI, so questions are grounded in a real guide, not guesswork.
-- **ChromaDB** – the small searchable library on disk that stores the
-  checklist in pieces.
-- **NVIDIA LLM** – the AI that writes the questions, decides follow-ups, and
-  analyzes the interview.
-- **SQLite** – the local file that remembers each interview and its report.
-- **LangGraph** – wraps every AI call in a self-repair loop (see below).
-
-## LangGraph: self-repairing AI calls
-
-The AI is asked to reply as strict JSON, but sometimes it returns broken
-output — cut off, wrapped in extra text, or missing a field. Before, that
-failed the whole request (HTTP 500): no questions, no report.
-
-Each AI call now runs through a small LangGraph loop:
+Three independently deployable services plus shared infrastructure. They
+communicate over HTTP; the same container images run in local, staging, and
+production — only environment variables differ.
 
 ```
-ask the model → try to parse it
-                     │
-        parsed OK ───┴─── broken → send it back with the error,
-             │                     ask for corrected JSON (retry up to 2×)
-           done                          │
-                              still broken after retries → raise the error
+frontend (nginx)  ──/api──►  app (FastAPI, stateless, N replicas)
+                                 │                    │
+                             HTTP │                HTTP │            SQL (pooled)
+                                 ▼                    ▼                 ▼
+                          rag service          llm service         PostgreSQL
+                          (FastAPI, N)         (vLLM, OpenAI-       (sessions,
+                          • /retrieve           compatible,         questions,
+                          • /ingest             self-hosted,        answers,
+                          • embeddings          in-house model)     reports)
+                          • vector store        NO public API
 ```
 
-So a request that used to fail on the first bad response now usually
-succeeds, with no change to the questions, the report, or the API. This is
-applied to all three AI steps: question generation, follow-up decisions, and
-report analysis (`app/graph/repair_graph.py`; retry count is
-`LLM_MAX_REPAIR_ATTEMPTS` in `app/config.py`).
+| Service | Responsibility | Scaling axis |
+|---------|----------------|--------------|
+| **app** | REST API, request validation, interview state machine, deterministic scoring, persistence | I/O-bound → add replicas |
+| **rag** | Fetch + chunk the knowledge base, embeddings (MiniLM), vector store (Chroma), similarity search | CPU/memory-bound → own replicas |
+| **llm** | Self-hosted model inference, OpenAI-compatible API (vLLM) | GPU-bound → own cluster |
+| **postgres** | All session/interview/report state | pooling now; read replicas later |
 
-## Setup
+**How the app talks to RAG** — a `RAGClient` protocol (`app/clients/rag.py`).
+`HTTPRAGClient` (prod) calls the `rag` service with timeouts, bounded retries,
+and a typed `RAGUnavailableError` on failure. `InProcessRAGClient` keeps
+retrieval in-process for single-node mode. `FakeRAGClient` is used in tests.
+No engine imports a vector store or `rag_service.*` directly.
+
+**How the app talks to the LLM** — an `LLMClient` protocol
+(`app/clients/llm.py`). `OpenAICompatLLMClient` points at self-hosted vLLM (or
+any OpenAI-compatible endpoint) via `APP_LLM_BASE_URL` / `APP_LLM_MODEL` only.
+`EchoLLMClient` is a dependency-free stub for local dev and CI. Provider is a
+config switch, not a code change. Sensitive founder data never reaches a public
+API in production — the base URL is the internal vLLM service.
+
+**Loose coupling** — retrieval, vector storage, LLM inference, and application
+logic are separate modules behind narrow interfaces. RAG and the LLM can be
+deployed and scaled without touching the app.
+
+## Run locally with UV
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+make install                 # uv sync --extra app --extra rag --extra dev
+cp .env.example .env          # defaults: echo LLM, in-process RAG, SQLite
+make ingest                   # build the local vector index (downloads MiniLM once)
+
+# Option A — one-shot CLI
+make questions INFO="We're a B2B SaaS startup, 15 staff, 2 crore INR ARR, seed stage."
+
+# Option B — the API (RAG in-process, echo LLM, SQLite, zero infra)
+make run-app                  # http://localhost:8000/docs
+
+# Option C — app + a separately-running RAG service
+make run-rag                  # terminal 1
+APP_RAG_MODE=http APP_RAG_BASE_URL=http://localhost:8100 make run-app   # terminal 2
 ```
 
-Add your NVIDIA API key to a `.env` file (do not commit it):
-
-```
-NVIDIA_API_KEY=your-key-here
-```
-
-## Usage
-
-**1. Build the knowledge base** (run once):
+Tests and checks:
 
 ```bash
-python scripts/build_index.py
+make test         # unit + integration (no live LLM)
+make lint         # ruff + mypy
+uv run pytest -m live      # opt-in; needs a real LLM endpoint + RUN_LIVE_TESTS=1
 ```
 
-**2. Get the top 10 questions for a company:**
+## Run with Docker
 
 ```bash
-python scripts/generate_questions.py "We are a B2B SaaS startup, 15 staff, ₹2 crore yearly revenue."
+make up                       # app + rag + postgres + frontend (echo LLM, no GPU)
+make up-ingest                # build the knowledge index inside the rag container
+# frontend:  http://localhost:3000
+# app docs:  http://localhost:8000/docs
+make down
 ```
 
-**3. Run the full interview + report (web + API):**
+Compose layout: `docker-compose.yml` (base, environment-agnostic) +
+`docker-compose.override.yml` (local hot-reload, auto-loaded) +
+`docker-compose.prod.yml` (adds self-hosted vLLM, replica counts, resource
+limits). Scale a service: `docker compose up --scale app=4 --scale rag=2`.
+
+### Production with a self-hosted LLM (vLLM)
 
 ```bash
-./scripts/run_servers.sh
+export APP_CORS_ALLOW_ORIGINS=https://your-frontend.example
+export VLLM_MODEL=meta-llama/Llama-3.1-8B-Instruct   # your in-house model
+make prod-config              # validate the merged config
+make prod-up                  # needs an NVIDIA GPU host
 ```
 
-- Backend (API):  http://127.0.0.1:8001
-- Frontend (web): http://127.0.0.1:3000
-- API docs:       http://127.0.0.1:8001/docs
+`docker-compose.prod.yml` runs `vllm/vllm-openai` and points the app at
+`http://vllm:8000/v1`. The app is unaware it is vLLM — swapping in another
+OpenAI-compatible backend is an env change.
 
-### Main API endpoints
+## API
 
 ```
-POST /sessions                   start a session, create its 10 questions
-GET  /sessions/{id}/questions    all questions + the current one to answer
-POST /questions/{id}/answer      submit an answer → follow-up or next question
-POST /sessions/{id}/complete     generate the due-diligence report
-GET  /sessions/{id}/report       fetch the saved report
+POST /sessions                    create a session, seed the top-N questions
+                                  (send Idempotency-Key to make retries safe)
+GET  /sessions/{id}               session status
+GET  /sessions/{id}/questions     all questions + the current one to answer
+POST /questions/{id}/answer       submit an answer → follow-up / next / complete
+POST /sessions/{id}/complete      generate the report (idempotent)
+GET  /sessions/{id}/report        fetch the stored report
+GET  /health                      liveness
+GET  /ready                       readiness (DB + rag + llm), 503 when degraded
 ```
 
-## Testing
+## Project layout
 
-```bash
-python tests/test_pipeline.py     # Phase 1
-python tests/test_phase2.py       # Phase 2
-python tests/test_phase3.py       # Phase 3
-python tests/test_repair_graph.py # LangGraph self-repair loop
+```
+app/
+  api/            FastAPI routes, schemas, health checks, app factory
+  orchestration/  interview state machine, report assembly, typed errors
+  engines/        LLM steps: question generation, follow-up, analysis + prompts
+  clients/        LLMClient / RAGClient protocols + HTTP/in-process/echo/fake impls
+  domain/         pure schemas, deterministic scoring, risk backstops, JSON parsing
+  persistence/    ORM models, engine/session factory (pooled)
+  llm_repair.py   generate → parse → repair loop around raw-JSON LLM output
+rag_service/      standalone RAG service (ingest, chunk, embed, retrieve)
+shared/           config (pydantic-settings), structured logging, wire contracts
+migrations/       Alembic
+docker/           per-service Dockerfiles, nginx config
+tests/            unit / integration / load (locust)
 ```
 
-Phase 2 and 3 tests run offline. `test_pipeline.py` needs a built index and
-`NVIDIA_API_KEY`.
+## Before production deployment
 
-## Note
-
-This is the engine only — there is no login or hosted website yet. What
-works today is the question, interview, and report logic behind the scenes.
+- Rotate the NVIDIA API key that a previous commit placed in `.env` (it is no
+  longer used — production is self-hosted — but it was exposed).
+- Provision a managed Postgres and set `APP_DATABASE_URL`; run `alembic upgrade head`.
+- Stand up the vLLM host (GPU) and load the in-house model.
+- Set `APP_CORS_ALLOW_ORIGINS` to the real frontend origin(s).
+- Put a TLS-terminating load balancer in front of `frontend` / `app`.
+- Add authentication (there is a clean seam at the API dependency layer).
+- Point `rag` at a standalone Chroma (`RAG_CHROMA_MODE=http`) so replicas share state.
+- Wire logs/metrics to your aggregator (logs are already structured JSON with request IDs).
+- Run a load test (`tests/load/locustfile.py`) against a staging stack.

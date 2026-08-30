@@ -1,0 +1,102 @@
+# Production overlay:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Adds the self-hosted vLLM service and points the app at it. Sensitive
+# founder data never leaves this deployment - the LLM base URL is the internal
+# vllm service, not a public API. Sets replica counts, resource limits, and
+# restart policies. Disables the local bind-mount / reload from the override
+# file by re-declaring the relevant services.
+
+services:
+  vllm:
+    image: vllm/vllm-openai:v0.6.4
+    command:
+      - "--model"
+      - "${VLLM_MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
+      - "--served-model-name"
+      - "${APP_LLM_MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
+      - "--max-model-len"
+      - "${VLLM_MAX_MODEL_LEN:-8192}"
+      - "--gpu-memory-utilization"
+      - "${VLLM_GPU_MEM_UTIL:-0.90}"
+    environment:
+      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN:-}
+    volumes:
+      - hfcache:/root/.cache/huggingface
+    ports:
+      - "8001:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${VLLM_GPU_COUNT:-1}
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)\""]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 180s
+    restart: unless-stopped
+
+  app:
+    command:
+      ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+    environment:
+      APP_ENVIRONMENT: production
+      APP_LOG_JSON: "true"
+      APP_LLM_PROVIDER: openai_compat
+      APP_LLM_BASE_URL: http://vllm:8000/v1
+      APP_LLM_API_KEY: ${APP_LLM_API_KEY:-not-needed-for-self-hosted}
+      APP_LLM_MODEL: ${APP_LLM_MODEL:-meta-llama/Llama-3.1-8B-Instruct}
+      APP_CORS_ALLOW_ORIGINS: ${APP_CORS_ALLOW_ORIGINS:?set the allowed browser origin(s) in production}
+    volumes: []
+    ports: []
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      rag:
+        condition: service_healthy
+      vllm:
+        condition: service_healthy
+    deploy:
+      replicas: ${APP_REPLICAS:-3}
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 1g
+    restart: unless-stopped
+
+  rag:
+    command:
+      ["uvicorn", "rag_service.main:app", "--host", "0.0.0.0", "--port", "8100", "--workers", "2"]
+    environment:
+      RAG_ENVIRONMENT: production
+      RAG_LOG_JSON: "true"
+      # Shared vector store across rag replicas: point at a standalone Chroma.
+      RAG_CHROMA_MODE: ${RAG_CHROMA_MODE:-embedded}
+      RAG_CHROMA_HOST: ${RAG_CHROMA_HOST:-chroma}
+      RAG_CHROMA_PORT: ${RAG_CHROMA_PORT:-8000}
+    volumes:
+      - ragdata:/data/chroma
+    ports: []
+    deploy:
+      replicas: ${RAG_REPLICAS:-2}
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2g
+    restart: unless-stopped
+
+  frontend:
+    environment:
+      API_BASE_URL: /api
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+    restart: unless-stopped
+
+volumes:
+  hfcache:

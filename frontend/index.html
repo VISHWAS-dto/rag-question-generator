@@ -39,8 +39,14 @@
     </button>
     <div id="questions"></div>
     <div id="error" class="error"></div>
+    <!-- Runtime config, rendered by the frontend container at start from
+         API_BASE_URL. Falls back to same-origin /api (the nginx proxy) or, when
+         opened as a bare file during dev, the local app port. -->
+    <script src="config.js" onerror="window.__CONFIG__={}"></script>
     <script>
-        const API_BASE = "http://127.0.0.1:8001";
+        const API_BASE =
+            (window.__CONFIG__ && window.__CONFIG__.apiBase) ||
+            (location.protocol === "file:" ? "http://127.0.0.1:8000" : "/api");
 
         // fetch() with a real timeout and an error message that explains WHY,
         // instead of the bare "Failed to fetch" the browser throws when a
